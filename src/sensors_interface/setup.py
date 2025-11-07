@@ -12,10 +12,10 @@ setup(
         ('share/' + package_name, ['package.xml']),
         
         # depth camera
-        ('share/' + package_name + '/launch', ['launch/depth_camera_sim.launch.py']),
-        ('share/' + package_name + '/urdf', ['urdf/depth_camera.xacro']),
+        # ('share/' + package_name + '/launch', ['launch/depth_camera_sim.launch.py']),
+        # ('share/' + package_name + '/urdf', ['urdf/depth_camera.urdf.xacro']),
         # ('share/' + package_name + '/rviz', ['rviz/depth_camera.rviz']),
-        ('share/' + package_name +'/worlds', ['worlds/empty.world']),
+        # ('share/' + package_name +'/worlds', ['worlds/obstacles.world']),
 
     ],
     install_requires=['setuptools'],

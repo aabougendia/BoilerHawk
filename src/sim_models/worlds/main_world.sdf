@@ -1,0 +1,27 @@
+<sdf version="1.9">
+  <world name="main_world">
+    <include>
+      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Ground Plane</uri>
+      <pose>0 0 0 0 0 0</pose>
+    </include>
+
+    <include>
+      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Brick Box 3x1x3</uri>
+      <pose>5 5 0 0 0 0</pose>
+    </include>
+
+
+    <!-- Tree from Fuel -->
+    <include>
+      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Pine Tree</uri>
+      <pose>15 15 0 0 0 0</pose>
+    </include>
+
+
+    <include>
+      <uri>model://depth_cam</uri>
+      <pose>10 10 1.5 0 0 0</pose>
+    </include>
+
+  </world>
+</sdf>
