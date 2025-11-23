@@ -12,31 +12,54 @@ class PerceptionNode(Node):
         super().__init__('perception_node')
 
         # --- Parameters ---
-        self.resolution = 0.1  # size of each voxel (meters)
-        self.max_range = 5.0   # meters around the drone to consider
+        self.declare_parameter('pointcloud_topic', '/camera/depth/color/points')
+        self.declare_parameter('occupancy_topic', '/perception/occupancy')
+        self.declare_parameter('resolution', 0.1)
+        self.declare_parameter('max_range', 5.0)
+        self.declare_parameter('grid_frame', 'map')
+
+        self.pointcloud_topic = str(self.get_parameter('pointcloud_topic').value)
+        self.occupancy_topic = str(self.get_parameter('occupancy_topic').value)
+        self.resolution = float(self.get_parameter('resolution').value)
+        self.max_range = float(self.get_parameter('max_range').value)
+        self.grid_frame = str(self.get_parameter('grid_frame').value)
+
+        if self.resolution <= 0.0:
+            self.get_logger().warning('Resolution must be positive; defaulting to 0.1 m')
+            self.resolution = 0.1
+        if self.max_range <= 0.0:
+            self.get_logger().warning('Max range must be positive; defaulting to 5.0 m')
+            self.max_range = 5.0
 
         # --- Subscriptions ---
         self.subscription = self.create_subscription(
             PointCloud2,
-            '/camera/depth/color/points',
+            self.pointcloud_topic,
             self.pointcloud_callback,
             10
         )
 
         # --- Publishers ---
-        self.map_pub = self.create_publisher(OccupancyGrid, '/perception/occupancy', 10)
+        self.map_pub = self.create_publisher(OccupancyGrid, self.occupancy_topic, 10)
 
-        self.get_logger().info("🧠 Perception node running. Subscribed to /camera/depth/color/points")
+        self._last_grid_log_time = None
+
+        self.get_logger().info(
+            f"🧠 Perception node running. Listening on {self.pointcloud_topic} and publishing {self.occupancy_topic}"
+        )
 
     def pointcloud_callback(self, msg):
         # Convert PointCloud2 to numpy array (x, y, z)
-        points = np.array([p[:3] for p in pc2.read_points(msg, field_names=("x", "y", "z"), skip_nans=True)])
+        points = pc2.read_points_numpy(msg, field_names=("x", "y", "z"), skip_nans=True)
+        points = np.asarray(points, dtype=np.float32)
         if len(points) == 0:
             return
 
         # Limit range (ignore faraway points)
         dists = np.linalg.norm(points, axis=1)
         points = points[dists < self.max_range]
+        if len(points) == 0:
+            return
 
         # Shift coordinates to make the map centered around drone
         # (assuming drone is at origin)
@@ -64,19 +87,26 @@ class PerceptionNode(Node):
         msg_out = OccupancyGrid()
         msg_out.header = Header()
         msg_out.header.stamp = self.get_clock().now().to_msg()
-        msg_out.header.frame_id = "map"
+        msg_out.header.frame_id = self.grid_frame
         msg_out.info.resolution = self.resolution
         msg_out.info.width = grid_size
         msg_out.info.height = grid_size
         msg_out.info.origin.position.x = -self.max_range
         msg_out.info.origin.position.y = -self.max_range
         msg_out.info.origin.position.z = 0.0
+        msg_out.info.origin.orientation.w = 1.0
 
         msg_out.data = grid.flatten().tolist()
 
         self.map_pub.publish(msg_out)
 
-        self.get_logger().info_throttle(5.0, f"Published occupancy grid ({grid_size}x{grid_size})")
+        now = self.get_clock().now()
+        if (
+            self._last_grid_log_time is None
+            or (now - self._last_grid_log_time).nanoseconds >= 5_000_000_000
+        ):
+            self.get_logger().info(f"Published occupancy grid ({grid_size}x{grid_size})")
+            self._last_grid_log_time = now
 
 def main(args=None):
     rclpy.init(args=args)
