@@ -1,0 +1,27 @@
+# Perception Module Configuration
+
+perception_node:
+  ros__parameters:
+    # Occupancy grid processing
+    occupancy_threshold: 50  # 0-100, cells above this are considered occupied
+    
+    # Path planning parameters
+    lookahead_distance: 20  # Number of cells to look ahead for local path
+    planning_frequency: 2.0  # Hz, how often to update local path
+    
+    # Start and goal positions (in world coordinates, meters)
+    start_x: 1.0
+    start_y: 1.0
+    goal_x: 8.0
+    goal_y: 8.0
+
+mock_planning_node:
+  ros__parameters:
+    # Occupancy grid parameters
+    grid_width: 100  # cells
+    grid_height: 100  # cells
+    grid_resolution: 0.1  # meters per cell
+    
+    # Publishing parameters
+    publish_frequency: 1.0  # Hz
+    add_dynamic_obstacles: false  # Enable/disable moving obstacles
