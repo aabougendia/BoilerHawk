@@ -1,0 +1,19 @@
+control_node:
+  ros__parameters:
+    # Distance threshold to consider a waypoint reached (meters)
+    waypoint_threshold: 0.5
+    
+    # Frequency for publishing setpoints to MAVROS (Hz)
+    # IMPORTANT: Must be high enough to maintain GUIDED mode control
+    setpoint_rate: 20.0
+    
+    # Automatically arm the drone when ready
+    # WARNING: Set to false for initial testing
+    auto_arm: false
+    
+    # Automatically switch to GUIDED mode when connected
+    auto_mode_switch: true
+    
+    # Target altitude for all waypoints (meters)
+    # This overrides the Z component from the planning path
+    target_altitude: 2.0
