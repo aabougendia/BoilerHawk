@@ -33,11 +33,11 @@ def generate_launch_description():
             output='screen'
         ),
 
-        # --- 3️⃣ Static TF from world → camera_link ---
+        # --- 3️⃣ Static TF from world → camera sensor frame ---
         Node(
             package='tf2_ros',
             executable='static_transform_publisher',
-            arguments=['0', '0', '0', '0', '0', '0', 'world', 'camera_link'],
+            arguments=['0', '0', '0', '0', '0', '0', 'world', 'depth_cam/camera_link/depth_camera_sensor'],
             output='screen'
         ),
 
