@@ -4,7 +4,7 @@ project(sim_models)
 find_package(ament_cmake REQUIRED)
 
 install(
-  DIRECTORY launch models worlds
+  DIRECTORY launch models worlds rviz
   DESTINATION share/${PROJECT_NAME}
 )
 

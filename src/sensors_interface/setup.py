@@ -31,7 +31,8 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            'depth_camera_node = sensors_interface.depth_camera_node:main'
+            'depth_camera_node = sensors_interface.depth_camera_node:main',
+            'drone_teleop_key = sensors_interface.drone_teleop_key:main',
         ],
     },
 )
