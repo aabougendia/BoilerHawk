@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Standalone demo of perception module with hypothetical data.
+Standalone demo of planning module with hypothetical data.
 This script demonstrates the path planning capabilities without requiring ROS 2.
 """
 
@@ -8,10 +8,10 @@ import numpy as np
 import sys
 import os
 
-# Add perception module to path
+# Add planning module to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from perception.path_planner import PathPlanner
+from planning.path_planner import PathPlanner
 
 
 def print_grid_with_path(grid, path=None, start=None, goal=None):
@@ -264,9 +264,9 @@ def demo_coordinate_conversion():
 def main():
     """Run all demos."""
     print("\n" + "="*60)
-    print("PERCEPTION MODULE - HYPOTHETICAL DATA DEMONSTRATION")
+    print("PLANNING MODULE - HYPOTHETICAL DATA DEMONSTRATION")
     print("="*60)
-    print("\nThis demo showcases the perception module's path planning")
+    print("\nThis demo showcases the planning module's path planning")
     print("capabilities using various hypothetical scenarios.")
     
     try:
@@ -287,10 +287,10 @@ def main():
         print("\n" + "="*60)
         print("ALL DEMOS COMPLETED SUCCESSFULLY!")
         print("="*60)
-        print("\nThe perception module is working correctly.")
+        print("\nThe planning module is working correctly.")
         print("All path planning algorithms executed successfully with hypothetical data.")
         print("\nNext steps:")
-        print("  1. Integrate with actual ROS 2 planning module")
+        print("  1. Integrate with actual ROS 2 perception module")
         print("  2. Test with real sensor data")
         print("  3. Tune parameters for your specific robot platform")
         print("="*60 + "\n")

@@ -5,7 +5,7 @@ Unit tests for path planner module using hypothetical data.
 
 import unittest
 import numpy as np
-from perception.path_planner import PathPlanner, Node
+from planning.path_planner import PathPlanner, Node
 
 
 class TestNode(unittest.TestCase):

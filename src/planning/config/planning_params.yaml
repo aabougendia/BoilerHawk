@@ -1,6 +1,6 @@
-# Perception Module Configuration
+# Planning Module Configuration
 
-perception_node:
+planning_node:
   ros__parameters:
     # Occupancy grid processing
     occupancy_threshold: 50  # 0-100, cells above this are considered occupied
@@ -15,7 +15,7 @@ perception_node:
     goal_x: 8.0
     goal_y: 8.0
 
-mock_planning_node:
+mock_perception_node:
   ros__parameters:
     # Occupancy grid parameters
     grid_width: 100  # cells

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Launch file for perception module with dynamic obstacles.
+Launch file for planning module with dynamic obstacles.
 """
 
 from launch import LaunchDescription
@@ -8,13 +8,13 @@ from launch_ros.actions import Node
 
 
 def generate_launch_description():
-    """Generate launch description for perception testing with dynamic obstacles."""
+    """Generate launch description for planning testing with dynamic obstacles."""
     
-    # Mock planning node with dynamic obstacles
-    mock_planning_node = Node(
-        package='perception',
-        executable='mock_planning_node',
-        name='mock_planning_node',
+    # Mock perception node with dynamic obstacles
+    mock_perception_node = Node(
+        package='planning',
+        executable='mock_perception_node',
+        name='mock_perception_node',
         output='screen',
         parameters=[{
             'grid_width': 100,
@@ -25,11 +25,11 @@ def generate_launch_description():
         }]
     )
     
-    # Perception node
-    perception_node = Node(
-        package='perception',
-        executable='perception_node',
-        name='perception_node',
+    # Planning node
+    planning_node = Node(
+        package='planning',
+        executable='planning_node',
+        name='planning_node',
         output='screen',
         parameters=[{
             'occupancy_threshold': 50,
@@ -43,6 +43,6 @@ def generate_launch_description():
     )
     
     return LaunchDescription([
-        mock_planning_node,
-        perception_node,
+        mock_perception_node,
+        planning_node,
     ])

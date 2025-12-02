@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Mock Planning Node for testing perception module.
+Mock Perception Node for testing planning module.
 Generates and publishes hypothetical occupancy grids.
 """
 
@@ -12,13 +12,13 @@ from std_msgs.msg import Header
 import numpy as np
 
 
-class MockPlanningNode(Node):
+class MockPerceptionNode(Node):
     """
-    Mock planning node that publishes test occupancy grids.
+    Mock perception node that publishes test occupancy grids.
     """
     
     def __init__(self):
-        super().__init__('mock_planning_node')
+        super().__init__('mock_perception_node')
         
         # Declare parameters
         self.declare_parameter('grid_width', 100)
@@ -54,7 +54,7 @@ class MockPlanningNode(Node):
         self.occupancy_grid = self.create_test_occupancy_grid()
         self.obstacle_position = 0
         
-        self.get_logger().info('Mock planning node initialized')
+        self.get_logger().info('Mock perception node initialized')
         self.get_logger().info(f'Grid size: {self.grid_width}x{self.grid_height}')
         self.get_logger().info(f'Resolution: {self.grid_resolution} m/cell')
     
@@ -163,7 +163,7 @@ class MockPlanningNode(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-    node = MockPlanningNode()
+    node = MockPerceptionNode()
     
     try:
         rclpy.spin(node)

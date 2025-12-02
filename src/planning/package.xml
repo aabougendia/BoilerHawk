@@ -1,9 +1,9 @@
 <?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
-  <name>perception</name>
+  <name>planning</name>
   <version>0.0.0</version>
-  <description>Perception module for path planning with occupancy grid</description>
+  <description>Planning module for path planning with occupancy grid</description>
   <maintainer email="aabugendia@gmail.com">aabougen</maintainer>
   <license>MIT</license>
 

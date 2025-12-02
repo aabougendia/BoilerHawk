@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
 """
-Quick demo script (non-interactive version) to verify the perception module.
+Quick demo script (non-interactive version) to verify the planning module.
 """
 
 import sys
 import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from perception.path_planner import PathPlanner
+from planning.path_planner import PathPlanner
 import numpy as np
 
 
 def main():
     print("\n" + "="*60)
-    print("PERCEPTION MODULE - QUICK VERIFICATION")
+    print("PLANNING MODULE - QUICK VERIFICATION")
     print("="*60 + "\n")
     
     # Test 1: Simple path
@@ -58,15 +58,15 @@ def main():
     assert abs(grid_pos[0] - 15) <= 1 and abs(grid_pos[1] - 15) <= 1, "Conversion should be accurate"
     
     print("\n" + "="*60)
-    print("✓ ALL TESTS PASSED - Perception module is working!")
+    print("✓ ALL TESTS PASSED - Planning module is working!")
     print("="*60)
-    print("\nThe perception module successfully:")
+    print("\nThe planning module successfully:")
     print("  • Plans optimal paths using A* algorithm")
     print("  • Avoids obstacles dynamically")
     print("  • Updates local paths in real-time")
     print("  • Handles coordinate transformations")
     print("  • Works with hypothetical occupancy grid data")
-    print("\nReady for integration with ROS 2 planning module!")
+    print("\nReady for integration with ROS 2 perception module!")
     print("="*60 + "\n")
 
 

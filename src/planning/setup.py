@@ -2,7 +2,7 @@ from setuptools import setup
 import os
 from glob import glob
 
-package_name = 'perception'
+package_name = 'planning'
 
 setup(
     name=package_name,
@@ -19,13 +19,13 @@ setup(
     zip_safe=True,
     maintainer='aabougen',
     maintainer_email='aabugendia@gmail.com',
-    description='Perception module for path planning with occupancy grid',
+    description='Planning module for path planning with occupancy grid',
     license='MIT',
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'perception_node = perception.perception_node:main',
-            'mock_planning_node = perception.mock_planning_node:main',
+            'planning_node = planning.planning_node:main',
+            'mock_perception_node = planning.mock_perception_node:main',
         ],
     },
 )

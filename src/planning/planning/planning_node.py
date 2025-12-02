@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Perception Node for ROS 2.
-Subscribes to occupancy grid from planning module and publishes local/global paths.
+Planning Node for ROS 2.
+Subscribes to occupancy grid from perception module and publishes local/global paths.
 """
 
 import rclpy
@@ -12,16 +12,16 @@ from std_msgs.msg import Header
 from visualization_msgs.msg import Marker, MarkerArray
 import numpy as np
 
-from perception.path_planner import PathPlanner
+from planning.path_planner import PathPlanner
 
 
-class PerceptionNode(Node):
+class PlanningNode(Node):
     """
-    ROS 2 node for perception and path planning.
+    ROS 2 node for planning and path planning.
     """
     
     def __init__(self):
-        super().__init__('perception_node')
+        super().__init__('planning_node')
         
         # Declare parameters
         self.declare_parameter('occupancy_threshold', 50)
@@ -86,7 +86,7 @@ class PerceptionNode(Node):
         # Timer for periodic path updates
         self.create_timer(1.0 / planning_frequency, self.planning_callback)
         
-        self.get_logger().info('Perception node initialized')
+        self.get_logger().info('Planning node initialized')
         self.get_logger().info(f'Start: ({self.start_x}, {self.start_y}), Goal: ({self.goal_x}, {self.goal_y})')
     
     def occupancy_callback(self, msg: OccupancyGrid):
@@ -272,7 +272,7 @@ class PerceptionNode(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-    node = PerceptionNode()
+    node = PlanningNode()
     
     try:
         rclpy.spin(node)
