@@ -140,11 +140,11 @@ def generate_launch_description():
         output='screen'
     )
     
-    # Static transform: iris_drone -> iris_drone/depth_camera_link (Gazebo scoped frame)
+    # Static transform: iris_drone -> iris_drone/depth_camera_link (camera attached to drone)
     static_tf_model_camera_link = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
-        arguments=['0.15', '0', '0.05', '0', '0.2', '0', 'iris_drone', 'iris_drone/depth_camera_link'],
+        arguments=['0.15', '0', '0.08', '0', '0.2', '0', 'iris_drone', 'iris_drone/depth_camera_link'],
         output='screen'
     )
     

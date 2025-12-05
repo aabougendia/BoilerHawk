@@ -197,10 +197,10 @@
       </link>
     </model>
 
-    <!-- Iris quadcopter with depth camera and sensors -->
+    <!-- X3 Quadcopter with integrated depth camera -->
     <include>
       <name>iris_drone</name>
-      <uri>model://iris_with_depth_cam</uri>
+      <uri>model://x3_with_depth_cam</uri>
       <pose>0 0 0.5 0 0 0</pose> <!-- Start 0.5m above landing pad -->
     </include>
 
