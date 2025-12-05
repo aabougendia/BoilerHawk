@@ -169,39 +169,11 @@
       </link>
     </model>
 
-    <!-- Landing pad for drone -->
-    <model name="landing_pad">
-      <static>true</static>
-      <pose>0 0 0.01 0 0 0</pose>
-      <link name="pad_link">
-        <visual name="visual">
-          <geometry>
-            <cylinder>
-              <radius>2.0</radius>
-              <length>0.02</length>
-            </cylinder>
-          </geometry>
-          <material>
-            <ambient>1.0 0.5 0.0 1</ambient>
-            <diffuse>1.0 0.5 0.0 1</diffuse>
-          </material>
-        </visual>
-        <collision name="collision">
-          <geometry>
-            <cylinder>
-              <radius>2.0</radius>
-              <length>0.02</length>
-            </cylinder>
-          </geometry>
-        </collision>
-      </link>
-    </model>
-
     <!-- X3 Quadcopter with integrated depth camera -->
     <include>
       <name>iris_drone</name>
       <uri>model://x3_with_depth_cam</uri>
-      <pose>0 0 0.5 0 0 0</pose> <!-- Start 0.5m above landing pad -->
+      <pose>8 10 10.0 0 0 0</pose> <!-- In front of building at 10m height -->
     </include>
 
   </world>

@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
 """
-Launch file for Iris drone outdoor simulation with depth camera
-Includes Gazebo, ROS 2 bridges for all sensors, RViz, and TF transforms
+Integrated launch file for complete drone simulation system with perception
+Launches:
+- Gazebo with outdoor world (X3 UAV + depth camera)
+- ROS2 bridges for all sensors (depth camera, IMU, GPS, etc.)
+- RViz for visualization
+- Perception node for occupancy grid generation
+- All TF transforms
 """
 
 import os
@@ -13,7 +18,7 @@ from ament_index_python.packages import get_package_share_directory
 
 
 def generate_launch_description():
-    # Get package directory
+    # Get package directories
     pkg_sim_models = get_package_share_directory('sim_models')
     
     # Expand paths
@@ -27,6 +32,18 @@ def generate_launch_description():
         description='Use simulation time'
     )
     
+    pointcloud_topic_arg = DeclareLaunchArgument(
+        'pointcloud_topic',
+        default_value='/depth_camera/points',
+        description='Point cloud topic from depth camera'
+    )
+    
+    occupancy_topic_arg = DeclareLaunchArgument(
+        'occupancy_topic',
+        default_value='/perception/occupancy',
+        description='Output occupancy grid topic'
+    )
+    
     # Gazebo simulation
     gazebo = ExecuteProcess(
         cmd=['gz', 'sim', world_path, '-r'],
@@ -34,7 +51,9 @@ def generate_launch_description():
         shell=False
     )
     
-    # ROS-Gazebo Bridge for depth camera RGB image
+    # ============ ROS-Gazebo Bridges for Sensors ============
+    
+    # Bridge for depth camera RGB image
     bridge_camera_image = Node(
         package='ros_gz_bridge',
         executable='parameter_bridge',
@@ -44,7 +63,7 @@ def generate_launch_description():
         output='screen'
     )
     
-    # ROS-Gazebo Bridge for depth camera depth image
+    # Bridge for depth camera depth image
     bridge_camera_depth = Node(
         package='ros_gz_bridge',
         executable='parameter_bridge',
@@ -54,7 +73,7 @@ def generate_launch_description():
         output='screen'
     )
     
-    # ROS-Gazebo Bridge for depth camera point cloud
+    # Bridge for depth camera point cloud
     bridge_camera_points = Node(
         package='ros_gz_bridge',
         executable='parameter_bridge',
@@ -64,7 +83,7 @@ def generate_launch_description():
         output='screen'
     )
     
-    # ROS-Gazebo Bridge for camera info
+    # Bridge for camera info
     bridge_camera_info = Node(
         package='ros_gz_bridge',
         executable='parameter_bridge',
@@ -74,7 +93,7 @@ def generate_launch_description():
         output='screen'
     )
     
-    # ROS-Gazebo Bridge for IMU (from iris_with_standoffs)
+    # Bridge for IMU
     bridge_imu = Node(
         package='ros_gz_bridge',
         executable='parameter_bridge',
@@ -84,7 +103,7 @@ def generate_launch_description():
         output='screen'
     )
     
-    # ROS-Gazebo Bridge for GPS/NavSat
+    # Bridge for GPS/NavSat
     bridge_gps = Node(
         package='ros_gz_bridge',
         executable='parameter_bridge',
@@ -94,7 +113,7 @@ def generate_launch_description():
         output='screen'
     )
     
-    # ROS-Gazebo Bridge for magnetometer
+    # Bridge for magnetometer
     bridge_mag = Node(
         package='ros_gz_bridge',
         executable='parameter_bridge',
@@ -104,7 +123,7 @@ def generate_launch_description():
         output='screen'
     )
     
-    # ROS-Gazebo Bridge for air pressure
+    # Bridge for air pressure
     bridge_air_pressure = Node(
         package='ros_gz_bridge',
         executable='parameter_bridge',
@@ -114,7 +133,7 @@ def generate_launch_description():
         output='screen'
     )
     
-    # ROS-Gazebo Bridge for drone pose
+    # Bridge for drone pose
     bridge_pose = Node(
         package='ros_gz_bridge',
         executable='parameter_bridge',
@@ -123,6 +142,8 @@ def generate_launch_description():
         ],
         output='screen'
     )
+    
+    # ============ TF Transforms ============
     
     # Static transform: world -> odom
     static_tf_world_odom = Node(
@@ -136,7 +157,7 @@ def generate_launch_description():
     static_tf_odom_model = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
-        arguments=['8', '10', '10.0', '0', '0', '0', 'odom', 'iris_drone'],
+        arguments=['0', '0', '0.5', '0', '0', '0', 'odom', 'iris_drone'],
         output='screen'
     )
     
@@ -156,7 +177,25 @@ def generate_launch_description():
         output='screen'
     )
     
-    # RViz2 (delayed start to allow bridges to initialize)
+    # ============ Perception Node ============
+    
+    perception_node = Node(
+        package='perception',
+        executable='perception_node',
+        name='perception_node',
+        parameters=[
+            {'use_sim_time': LaunchConfiguration('use_sim_time')},
+            {'pointcloud_topic': LaunchConfiguration('pointcloud_topic')},
+            {'occupancy_topic': LaunchConfiguration('occupancy_topic')},
+            {'resolution': 0.1},
+            {'max_range': 5.0},
+            {'grid_frame': 'iris_drone/depth_camera_link'}
+        ],
+        output='screen'
+    )
+    
+    # ============ RViz Visualization ============
+    
     rviz = TimerAction(
         period=3.0,
         actions=[
@@ -171,8 +210,15 @@ def generate_launch_description():
     )
     
     return LaunchDescription([
+        # Arguments
         use_sim_time_arg,
+        pointcloud_topic_arg,
+        occupancy_topic_arg,
+        
+        # Simulation
         gazebo,
+        
+        # Sensor bridges
         bridge_camera_image,
         bridge_camera_depth,
         bridge_camera_points,
@@ -182,9 +228,16 @@ def generate_launch_description():
         bridge_mag,
         bridge_air_pressure,
         bridge_pose,
+        
+        # TF transforms
         static_tf_world_odom,
         static_tf_odom_model,
         static_tf_model_camera_link,
         static_tf_camera_link_sensor,
+        
+        # Perception
+        perception_node,
+        
+        # Visualization
         rviz
     ])
