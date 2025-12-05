@@ -1,0 +1,208 @@
+<?xml version="1.0" ?>
+<sdf version="1.9">
+  <world name="outdoor_world">
+    <!-- Physics settings optimized for drone flight -->
+    <physics name="1ms" type="ignore">
+      <max_step_size>0.001</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+    </physics>
+
+    <!-- Essential Gazebo plugins -->
+    <plugin
+      filename="gz-sim-physics-system"
+      name="gz::sim::systems::Physics">
+    </plugin>
+    <plugin
+      filename="gz-sim-user-commands-system"
+      name="gz::sim::systems::UserCommands">
+    </plugin>
+    <plugin
+      filename="gz-sim-scene-broadcaster-system"
+      name="gz::sim::systems::SceneBroadcaster">
+    </plugin>
+    <plugin
+      filename="gz-sim-sensors-system"
+      name="gz::sim::systems::Sensors">
+      <render_engine>ogre2</render_engine>
+    </plugin>
+    <plugin
+      filename="gz-sim-imu-system"
+      name="gz::sim::systems::Imu">
+    </plugin>
+
+    <!-- Lighting: Realistic sun -->
+    <light type="directional" name="sun">
+      <cast_shadows>true</cast_shadows>
+      <pose>0 0 10 0 0 0</pose>
+      <diffuse>0.8 0.8 0.8 1</diffuse>
+      <specular>0.5 0.5 0.5 1</specular>
+      <attenuation>
+        <range>1000</range>
+        <constant>0.9</constant>
+        <linear>0.01</linear>
+        <quadratic>0.001</quadratic>
+      </attenuation>
+      <direction>-0.5 0.1 -0.9</direction>
+    </light>
+
+    <!-- Sky -->
+    <scene>
+      <ambient>0.4 0.4 0.4 1</ambient>
+      <background>0.7 0.7 1.0 1</background>
+      <shadows>true</shadows>
+      <grid>false</grid>
+    </scene>
+
+    <!-- Textured ground plane (large outdoor area) -->
+    <include>
+      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Ground Plane</uri>
+      <pose>0 0 0 0 0 0</pose>
+    </include>
+
+    <!-- Outdoor structures -->
+    <!-- Simple building exterior -->
+    <model name="simple_building">
+      <static>true</static>
+      <pose>15 10 0 0 0 0</pose>
+      <link name="building_link">
+        <visual name="building_visual">
+          <geometry>
+            <box>
+              <size>8 6 4</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.7 0.5 0.4 1</ambient>
+            <diffuse>0.7 0.5 0.4 1</diffuse>
+          </material>
+        </visual>
+        <collision name="building_collision">
+          <geometry>
+            <box>
+              <size>8 6 4</size>
+            </box>
+          </geometry>
+        </collision>
+      </link>
+    </model>
+
+    <!-- Natural elements: Trees -->
+    <include>
+      <name>pine_tree_1</name>
+      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Pine Tree</uri>
+      <pose>10 -5 0 0 0 0</pose>
+    </include>
+
+    <include>
+      <name>pine_tree_2</name>
+      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Pine Tree</uri>
+      <pose>-8 8 0 0 0 0</pose>
+    </include>
+
+    <include>
+      <name>pine_tree_3</name>
+      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Pine Tree</uri>
+      <pose>-10 -10 0 0 0 0</pose>
+    </include>
+
+    <!-- Outdoor obstacles -->
+    <include>
+      <name>cone_1</name>
+      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Construction Cone</uri>
+      <pose>5 5 0 0 0 0</pose>
+    </include>
+
+    <include>
+      <name>barrel</name>
+      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Construction Barrel</uri>
+      <pose>6 7 0 0 0 0</pose>
+    </include>
+
+    <!-- Rocks for natural outdoor terrain -->
+    <model name="rock_1">
+      <static>true</static>
+      <pose>-5 5 0 0 0 0</pose>
+      <link name="rock_link">
+        <visual name="rock_visual">
+          <geometry>
+            <sphere>
+              <radius>1.2</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.5 0.5 0.5 1</ambient>
+            <diffuse>0.6 0.6 0.6 1</diffuse>
+          </material>
+        </visual>
+        <collision name="rock_collision">
+          <geometry>
+            <sphere>
+              <radius>1.2</radius>
+            </sphere>
+          </geometry>
+        </collision>
+      </link>
+    </model>
+
+    <model name="rock_2">
+      <static>true</static>
+      <pose>8 -8 0 0 0 0.5</pose>
+      <link name="rock_link">
+        <visual name="rock_visual">
+          <geometry>
+            <sphere>
+              <radius>0.8</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.4 0.4 0.4 1</ambient>
+            <diffuse>0.5 0.5 0.5 1</diffuse>
+          </material>
+        </visual>
+        <collision name="rock_collision">
+          <geometry>
+            <sphere>
+              <radius>0.8</radius>
+            </sphere>
+          </geometry>
+        </collision>
+      </link>
+    </model>
+
+    <!-- Landing pad for drone -->
+    <model name="landing_pad">
+      <static>true</static>
+      <pose>0 0 0.01 0 0 0</pose>
+      <link name="pad_link">
+        <visual name="visual">
+          <geometry>
+            <cylinder>
+              <radius>2.0</radius>
+              <length>0.02</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>1.0 0.5 0.0 1</ambient>
+            <diffuse>1.0 0.5 0.0 1</diffuse>
+          </material>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <cylinder>
+              <radius>2.0</radius>
+              <length>0.02</length>
+            </cylinder>
+          </geometry>
+        </collision>
+      </link>
+    </model>
+
+    <!-- Iris quadcopter with depth camera and sensors -->
+    <include>
+      <name>iris_drone</name>
+      <uri>model://iris_with_depth_cam</uri>
+      <pose>0 0 0.5 0 0 0</pose> <!-- Start 0.5m above landing pad -->
+    </include>
+
+  </world>
+</sdf>
