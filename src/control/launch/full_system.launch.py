@@ -14,18 +14,18 @@ def generate_launch_description():
     """Generate launch description for full system."""
     
     # Get package directories
-    perception_pkg_dir = get_package_share_directory('perception')
+    planning_pkg_dir = get_package_share_directory('planning')
     control_pkg_dir = get_package_share_directory('control')
     
     # Path to config files
-    perception_config = os.path.join(perception_pkg_dir, 'config', 'perception_params.yaml')
+    planning_config = os.path.join(planning_pkg_dir, 'config', 'planning_params.yaml')
     control_config = os.path.join(control_pkg_dir, 'config', 'control_params.yaml')
     
-    # Mock planning node (generates test occupancy grids)
-    mock_planning_node = Node(
-        package='perception',
-        executable='mock_planning_node',
-        name='mock_planning_node',
+    # Mock perception node (generates test occupancy grids)
+    mock_perception_node = Node(
+        package='planning',
+        executable='mock_perception_node',
+        name='mock_perception_node',
         output='screen',
         parameters=[{
             'grid_width': 100,
@@ -37,13 +37,13 @@ def generate_launch_description():
         emulate_tty=True,
     )
     
-    # Perception node (path planning)
-    perception_node = Node(
-        package='perception',
-        executable='perception_node',
-        name='perception_node',
+    # Planning node (path planning)
+    planning_node = Node(
+        package='planning',
+        executable='planning_node',
+        name='planning_node',
         output='screen',
-        parameters=[perception_config],
+        parameters=[planning_config],
         emulate_tty=True,
     )
     
@@ -58,7 +58,7 @@ def generate_launch_description():
     )
     
     return LaunchDescription([
-        mock_planning_node,
-        perception_node,
+        mock_perception_node,
+        planning_node,
         control_node,
     ])

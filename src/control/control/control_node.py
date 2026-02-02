@@ -10,7 +10,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPo
 from nav_msgs.msg import Path
 from geometry_msgs.msg import PoseStamped, Point
 from std_msgs.msg import String
-from mavros_msgs.msg import State
+from mavros_msgs.msg import State, OverrideRCIn
 from mavros_msgs.srv import CommandBool, SetMode
 import math
 
@@ -30,6 +30,7 @@ class ControlNode(Node):
         self.declare_parameter('auto_arm', False)
         self.declare_parameter('auto_mode_switch', True)
         self.declare_parameter('target_altitude', 2.0)
+        self.declare_parameter('sitl_mode', True)  # Disable failsafes for SITL
         
         # Get parameters
         self.waypoint_threshold = self.get_parameter('waypoint_threshold').value
@@ -37,6 +38,14 @@ class ControlNode(Node):
         self.auto_arm = self.get_parameter('auto_arm').value
         self.auto_mode_switch = self.get_parameter('auto_mode_switch').value
         self.target_altitude = self.get_parameter('target_altitude').value
+        self.sitl_mode = self.get_parameter('sitl_mode').value
+        
+        # Failsafe override tracking
+        self.failsafe_disabled = False
+        
+        # Takeoff state tracking
+        self.takeoff_complete = False
+        self.takeoff_requested = False
         
         # State variables
         self.current_path = None
@@ -44,6 +53,11 @@ class ControlNode(Node):
         self.current_pose = None
         self.mavros_state = None
         self.target_setpoint = None
+        
+        # Diagnostic counters
+        self.diag_path_received_count = 0
+        self.diag_setpoint_published_count = 0
+        self.diag_last_path_time = None
         
         # QoS profile for MAVROS compatibility
         qos_profile = QoSProfile(
@@ -88,9 +102,20 @@ class ControlNode(Node):
             10
         )
         
+        # RC Override publisher (for disabling throttle failsafe in SITL)
+        self.rc_override_pub = self.create_publisher(
+            OverrideRCIn,
+            '/mavros/rc/override',
+            10
+        )
+        
         # Service clients
         self.arming_client = self.create_client(CommandBool, '/mavros/cmd/arming')
         self.set_mode_client = self.create_client(SetMode, '/mavros/set_mode')
+        
+        # Import CommandTOL for takeoff service
+        from mavros_msgs.srv import CommandTOL
+        self.takeoff_client = self.create_client(CommandTOL, '/mavros/cmd/takeoff')
         
         # Timer for setpoint publishing (must be continuous for GUIDED mode)
         self.setpoint_timer = self.create_timer(
@@ -101,11 +126,32 @@ class ControlNode(Node):
         # Timer for status monitoring
         self.status_timer = self.create_timer(1.0, self.status_callback)
         
+        # Timer for detailed diagnostics (every 5 seconds)
+        self.diag_timer = self.create_timer(5.0, self.diagnostics_callback)
+        
         self.get_logger().info('Control node initialized')
         self.get_logger().info(f'Waypoint threshold: {self.waypoint_threshold}m')
         self.get_logger().info(f'Setpoint rate: {setpoint_rate}Hz')
         self.get_logger().info(f'Auto arm: {self.auto_arm}')
         self.get_logger().info(f'Auto mode switch: {self.auto_mode_switch}')
+        self.get_logger().info(f'SITL mode (failsafes disabled): {self.sitl_mode}')
+    
+    def disable_throttle_failsafe(self):
+        """
+        Disable throttle failsafe by setting RC channel 3 (throttle) to mid position.
+        This prevents ArduPilot from triggering failsafe due to low throttle in SITL.
+        """
+        if not self.sitl_mode:
+            return
+        
+        rc_msg = OverrideRCIn()
+        # Set all channels to 0 (no override) except channel 3 (throttle)
+        rc_msg.channels = [0, 0, 1500, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+        self.rc_override_pub.publish(rc_msg)
+        
+        if not self.failsafe_disabled:
+            self.get_logger().info('Throttle failsafe disabled (RC3=1500)')
+            self.failsafe_disabled = True
     
     def path_callback(self, msg: Path):
         """
@@ -120,6 +166,8 @@ class ControlNode(Node):
         
         self.current_path = msg
         self.current_waypoint_idx = 0
+        self.diag_path_received_count += 1
+        self.diag_last_path_time = self.get_clock().now()
         
         self.get_logger().info(f'Received new path with {len(msg.poses)} waypoints')
         
@@ -140,8 +188,16 @@ class ControlNode(Node):
         if prev_state is None or prev_state.connected != msg.connected:
             if msg.connected:
                 self.get_logger().info('Connected to flight controller')
+                # Disable throttle failsafe when connected (for SITL)
+                self.disable_throttle_failsafe()
             else:
                 self.get_logger().warn('Disconnected from flight controller')
+        
+        # Request takeoff when armed and in GUIDED mode
+        if msg.armed and msg.mode == 'GUIDED' and not self.takeoff_requested:
+            self.get_logger().info('Armed in GUIDED mode - requesting takeoff')
+            if self.request_takeoff():
+                self.takeoff_requested = True
         
         # Log mode changes
         if prev_state is None or prev_state.mode != msg.mode:
@@ -164,12 +220,30 @@ class ControlNode(Node):
         """
         self.current_pose = msg
         
+        # Robust takeoff detection: If we are at target altitude, assume takeoff complete
+        # This handles cases where the service callback might have been missed
+        if not self.takeoff_complete and \
+           self.mavros_state is not None and \
+           self.mavros_state.armed and \
+           self.mavros_state.mode == 'GUIDED' and \
+           msg.pose.position.z >= (self.target_altitude * 0.9):
+            self.get_logger().info(f'Altitude {msg.pose.position.z:.2f}m reached - marking takeoff complete')
+            self.takeoff_complete = True
+            
         # Check if current waypoint is reached
         if self.current_path is not None and self.target_setpoint is not None:
             distance = self.calculate_distance(
                 self.current_pose.pose.position,
                 self.target_setpoint.pose.position
             )
+            
+            # Debug logging
+            if self.current_waypoint_idx == 0 or distance < 1.0:
+                self.get_logger().info(
+                    f'Dist: {distance:.2f}m | '
+                    f'Pos: ({self.current_pose.pose.position.x:.2f}, {self.current_pose.pose.position.y:.2f}) | '
+                    f'Tgt: ({self.target_setpoint.pose.position.x:.2f}, {self.target_setpoint.pose.position.y:.2f})'
+                )
             
             if distance < self.waypoint_threshold:
                 self.advance_waypoint()
@@ -179,6 +253,22 @@ class ControlNode(Node):
         Periodic callback to publish setpoint commands.
         This MUST run continuously for GUIDED mode to maintain control.
         """
+        # Keep RC override active to prevent failsafe
+        if self.sitl_mode and self.mavros_state is not None and self.mavros_state.connected:
+            self.disable_throttle_failsafe()
+        
+        # Wait for takeoff to complete before sending setpoints
+        if not self.takeoff_complete:
+            # Log why we're not publishing (throttle to 1Hz)
+            now = self.get_clock().now().nanoseconds
+            if not hasattr(self, '_last_wait_log') or (now - self._last_wait_log) > 1e9:
+                self.get_logger().warn(
+                    f'[DIAG] Waiting for takeoff - takeoff_complete={self.takeoff_complete}, '
+                    f'takeoff_requested={self.takeoff_requested}'
+                )
+                self._last_wait_log = now
+            return
+
         if self.target_setpoint is None:
             # If no waypoint available, hold current position
             if self.current_pose is not None:
@@ -187,11 +277,23 @@ class ControlNode(Node):
                 setpoint.header.frame_id = 'map'
                 setpoint.pose = self.current_pose.pose
                 self.setpoint_pub.publish(setpoint)
+                self.diag_setpoint_published_count += 1
             return
         
         # Update timestamp and publish target setpoint
         self.target_setpoint.header.stamp = self.get_clock().now().to_msg()
         self.setpoint_pub.publish(self.target_setpoint)
+        self.diag_setpoint_published_count += 1
+        
+        # Debug log (throttle to 1Hz)
+        now = self.get_clock().now().nanoseconds
+        if not hasattr(self, '_last_setpoint_log') or (now - self._last_setpoint_log) > 1e9:
+            self.get_logger().info(
+                f'Publishing setpoint: ({self.target_setpoint.pose.position.x:.2f}, '
+                f'{self.target_setpoint.pose.position.y:.2f}, '
+                f'{self.target_setpoint.pose.position.z:.2f})'
+            )
+            self._last_setpoint_log = now
     
     def status_callback(self):
         """
@@ -211,6 +313,111 @@ class ControlNode(Node):
                              f'- Mode: {self.mavros_state.mode} - Armed: {self.mavros_state.armed}')
         
         self.status_pub.publish(status_msg)
+    
+    def diagnostics_callback(self):
+        """
+        Periodic callback to publish detailed diagnostics for debugging.
+        Runs every 5 seconds with comprehensive system state.
+        """
+        self.get_logger().info('=' * 60)
+        self.get_logger().info('[DIAGNOSTICS] Control Node State Summary')
+        self.get_logger().info('=' * 60)
+        
+        # MAVROS connection state
+        if self.mavros_state is None:
+            self.get_logger().warn('[DIAG] MAVROS: NOT CONNECTED (state is None)')
+        else:
+            self.get_logger().info(
+                f'[DIAG] MAVROS: connected={self.mavros_state.connected}, '
+                f'mode={self.mavros_state.mode}, armed={self.mavros_state.armed}'
+            )
+        
+        # Takeoff state
+        self.get_logger().info(
+            f'[DIAG] TAKEOFF: requested={self.takeoff_requested}, '
+            f'complete={self.takeoff_complete}'
+        )
+        
+        # Current position
+        if self.current_pose is None:
+            self.get_logger().warn('[DIAG] POSITION: No pose received yet')
+        else:
+            pos = self.current_pose.pose.position
+            self.get_logger().info(
+                f'[DIAG] POSITION: x={pos.x:.2f}, y={pos.y:.2f}, z={pos.z:.2f}'
+            )
+        
+        # Path state
+        if self.current_path is None:
+            self.get_logger().warn('[DIAG] PATH: No path received!')
+        else:
+            self.get_logger().info(
+                f'[DIAG] PATH: {len(self.current_path.poses)} waypoints, '
+                f'current_idx={self.current_waypoint_idx}'
+            )
+        
+        # Target setpoint
+        if self.target_setpoint is None:
+            self.get_logger().warn('[DIAG] TARGET: No target setpoint set')
+        else:
+            tgt = self.target_setpoint.pose.position
+            self.get_logger().info(
+                f'[DIAG] TARGET: x={tgt.x:.2f}, y={tgt.y:.2f}, z={tgt.z:.2f}'
+            )
+        
+        # Counters
+        self.get_logger().info(
+            f'[DIAG] COUNTERS: paths_received={self.diag_path_received_count}, '
+            f'setpoints_published={self.diag_setpoint_published_count}'
+        )
+        
+        # Time since last path
+        if self.diag_last_path_time is not None:
+            elapsed = (self.get_clock().now() - self.diag_last_path_time).nanoseconds / 1e9
+            self.get_logger().info(f'[DIAG] Last path received {elapsed:.1f}s ago')
+        
+        # Check for common issues
+        self.get_logger().info('-' * 40)
+        self.get_logger().info('[DIAG] Issue Detection:')
+        
+        issues_found = False
+        
+        if self.mavros_state is None or not self.mavros_state.connected:
+            self.get_logger().error('[ISSUE] MAVROS not connected!')
+            issues_found = True
+        
+        if self.mavros_state and self.mavros_state.mode != 'GUIDED':
+            self.get_logger().error(
+                f'[ISSUE] Not in GUIDED mode (current: {self.mavros_state.mode})'
+            )
+            issues_found = True
+        
+        if self.mavros_state and not self.mavros_state.armed:
+            self.get_logger().warn('[ISSUE] Drone not armed')
+            issues_found = True
+        
+        if not self.takeoff_complete:
+            self.get_logger().warn(
+                '[ISSUE] Takeoff not complete - setpoints NOT being published!'
+            )
+            issues_found = True
+        
+        if self.current_path is None:
+            self.get_logger().error(
+                '[ISSUE] No path received from /local_path topic!'
+            )
+            issues_found = True
+        
+        if self.diag_setpoint_published_count == 0 and self.takeoff_complete:
+            self.get_logger().error(
+                '[ISSUE] Takeoff complete but no setpoints published!'
+            )
+            issues_found = True
+        
+        if not issues_found:
+            self.get_logger().info('[DIAG] No issues detected - system OK')
+        
+        self.get_logger().info('=' * 60)
     
     def update_target_waypoint(self):
         """
@@ -324,6 +531,51 @@ class ControlNode(Node):
                 self.get_logger().warn('Arming failed')
         except Exception as e:
             self.get_logger().error(f'Arming service call failed: {e}')
+    
+    def request_takeoff(self):
+        """
+        Request takeoff to target altitude.
+        
+        Returns:
+            bool: True if request sent successfully
+        """
+        if not self.takeoff_client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().warn('Takeoff service not available')
+            return False
+        
+        from mavros_msgs.srv import CommandTOL
+        request = CommandTOL.Request()
+        request.min_pitch = 0.0
+        request.yaw = 0.0
+        request.latitude = 0.0
+        request.longitude = 0.0
+        request.altitude = float(self.target_altitude)
+        
+        future = self.takeoff_client.call_async(request)
+        future.add_done_callback(self.takeoff_callback)
+        self.get_logger().info(f'Takeoff requested to {self.target_altitude}m')
+        return True
+    
+    def takeoff_callback(self, future):
+        """
+        Callback for takeoff service response.
+        """
+        try:
+            from mavros_msgs.srv import CommandTOL
+            response = future.result()
+            if response.success:
+                self.get_logger().info('Takeoff command accepted')
+                # Give it time to climb before declaring complete
+                self.takeoff_timer = self.create_timer(3.0, self.mark_takeoff_complete, one_shot=True)
+            else:
+                self.get_logger().warn('Takeoff command failed')
+        except Exception as e:
+            self.get_logger().error(f'Takeoff service call failed: {e}')
+    
+    def mark_takeoff_complete(self):
+        """Mark takeoff as complete after delay."""
+        self.takeoff_complete = True
+        self.get_logger().info('Takeoff complete - waypoint following active')
 
 
 def main(args=None):
