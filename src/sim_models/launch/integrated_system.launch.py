@@ -1,12 +1,9 @@
 #!/usr/bin/env python3
 """
-Integrated launch file for complete drone simulation system with perception
-Launches:
-- Gazebo with outdoor world (X3 UAV + depth camera)
-- ROS2 bridges for all sensors (depth camera, IMU, GPS, etc.)
-- RViz for visualization
-- Perception node for occupancy grid generation
-- All TF transforms
+Integrated launch file for complete BoilerHawk autonomous drone system.
+Launches the full pipeline:
+  Gazebo (sensors) → ros_gz_bridge → Perception → Planning → Control
+Plus RViz visualization and TF transforms.
 """
 
 import os
@@ -20,10 +17,14 @@ from ament_index_python.packages import get_package_share_directory
 def generate_launch_description():
     # Get package directories
     pkg_sim_models = get_package_share_directory('sim_models')
+    pkg_planning = get_package_share_directory('planning')
+    pkg_control = get_package_share_directory('control')
     
     # Expand paths
-    world_path = os.path.expanduser('~/boilerHawk_ws/src/sim_models/worlds/outdoor_world.sdf')
+    world_path = os.path.expanduser('~/BoilerHawk/src/sim_models/worlds/outdoor_world.sdf')
     rviz_config_path = os.path.join(pkg_sim_models, 'rviz', 'drone_outdoor.rviz')
+    planning_config = os.path.join(pkg_planning, 'config', 'planning_params.yaml')
+    control_config = os.path.join(pkg_control, 'config', 'control_params.yaml')
     
     # Declare arguments
     use_sim_time_arg = DeclareLaunchArgument(
@@ -189,9 +190,37 @@ def generate_launch_description():
             {'occupancy_topic': LaunchConfiguration('occupancy_topic')},
             {'resolution': 0.1},
             {'max_range': 5.0},
-            {'grid_frame': 'iris_drone/depth_camera_link'}
+            {'grid_frame': 'map'}
         ],
         output='screen'
+    )
+    
+    # ============ Planning Node ============
+    
+    planning_node = Node(
+        package='planning',
+        executable='planning_node',
+        name='planning_node',
+        parameters=[
+            planning_config,
+            {'use_sim_time': LaunchConfiguration('use_sim_time')},
+        ],
+        output='screen',
+        emulate_tty=True,
+    )
+    
+    # ============ Control Node ============
+    
+    control_node = Node(
+        package='control',
+        executable='control_node',
+        name='control_node',
+        parameters=[
+            control_config,
+            {'use_sim_time': LaunchConfiguration('use_sim_time')},
+        ],
+        output='screen',
+        emulate_tty=True,
     )
     
     # ============ RViz Visualization ============
@@ -235,8 +264,10 @@ def generate_launch_description():
         static_tf_model_camera_link,
         static_tf_camera_link_sensor,
         
-        # Perception
+        # Autonomy pipeline: Perception → Planning → Control
         perception_node,
+        planning_node,
+        control_node,
         
         # Visualization
         rviz

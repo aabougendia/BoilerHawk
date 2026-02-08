@@ -2,6 +2,12 @@
 
 planning_node:
   ros__parameters:
+    # Topic configuration
+    occupancy_topic: '/perception/occupancy'  # From perception node
+    global_path_topic: '/global_path'
+    local_path_topic: '/local_path'           # Control node subscribes to this
+    path_frame: 'map'
+
     # Occupancy grid processing
     occupancy_threshold: 50  # 0-100, cells above this are considered occupied
     

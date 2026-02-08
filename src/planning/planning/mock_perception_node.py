@@ -26,6 +26,7 @@ class MockPerceptionNode(Node):
         self.declare_parameter('grid_resolution', 0.1)
         self.declare_parameter('publish_frequency', 1.0)
         self.declare_parameter('add_dynamic_obstacles', False)
+        self.declare_parameter('occupancy_topic', '/perception/occupancy')
         
         # Get parameters
         self.grid_width = self.get_parameter('grid_width').value
@@ -33,11 +34,12 @@ class MockPerceptionNode(Node):
         self.grid_resolution = self.get_parameter('grid_resolution').value
         publish_frequency = self.get_parameter('publish_frequency').value
         self.add_dynamic_obstacles = self.get_parameter('add_dynamic_obstacles').value
+        occupancy_topic = self.get_parameter('occupancy_topic').value
         
         # Publishers
         self.occupancy_pub = self.create_publisher(
             OccupancyGrid,
-            '/occupancy_grid',
+            occupancy_topic,
             10
         )
         
