@@ -89,7 +89,7 @@ def generate_launch_description():
         package='ros_gz_bridge',
         executable='parameter_bridge',
         arguments=[
-            '/gps@sensor_msgs/msg/NavSatFix@gz.msgs.NavSat'
+            '/navsat@sensor_msgs/msg/NavSatFix@gz.msgs.NavSat'
         ],
         output='screen'
     )
@@ -136,7 +136,7 @@ def generate_launch_description():
     static_tf_odom_model = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
-        arguments=['8', '10', '10.0', '0', '0', '0', 'odom', 'iris_drone'],
+        arguments=['0', '0', '0.195', '0', '0', '0', 'odom', 'iris_drone'],
         output='screen'
     )
     

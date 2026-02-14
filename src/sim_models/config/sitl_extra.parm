@@ -1,0 +1,15 @@
+# BoilerHawk SITL Extra Parameters
+# Disable RC failsafes for SITL (no RC transmitter in simulation)
+FS_THR_ENABLE   0
+FS_GCS_ENABLE   0
+
+# Disable pre-arm safety checks that don't apply in SITL
+ARMING_CHECK    0
+BRD_SAFETYENABLE 0
+
+# Ensure EKF can initialize without GPS fix timeout
+EK3_SRC1_POSXY  3
+EK3_SRC1_POSZ   1
+EK3_SRC1_VELXY  3
+EK3_SRC1_VELZ   3
+EK3_SRC1_YAW    1

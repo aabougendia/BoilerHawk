@@ -108,7 +108,7 @@ def generate_launch_description():
         package='ros_gz_bridge',
         executable='parameter_bridge',
         arguments=[
-            '/gps@sensor_msgs/msg/NavSatFix@gz.msgs.NavSat'
+            '/navsat@sensor_msgs/msg/NavSatFix@gz.msgs.NavSat'
         ],
         output='screen'
     )
