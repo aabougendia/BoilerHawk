@@ -51,36 +51,4 @@ def generate_launch_description():
             arguments=['-d', rviz_config_path],
             output='screen'
         ),
-
-        # 5️⃣ Perception: PointCloud2 → OccupancyGrid
-        Node(
-            package='perception',
-            executable='perception_node',
-            name='perception_node',
-            parameters=[
-                {'pointcloud_topic': '/camera/points'},
-                {'occupancy_topic': '/occupancy_grid'},
-                {'resolution': 0.1},
-                {'max_range': 5.0},
-                {'grid_frame': 'world'},
-            ],
-            output='screen'
-        ),
-
-        # 6️⃣ Planning: OccupancyGrid → Path
-        Node(
-            package='planning',
-            executable='planning_node',
-            name='planning_node',
-            parameters=[
-                {'occupancy_threshold': 50},
-                {'lookahead_distance': 20},
-                {'planning_frequency': 2.0},
-                {'start_x': 0.0},
-                {'start_y': 0.0},
-                {'goal_x': 3.0},
-                {'goal_y': 3.0},
-            ],
-            output='screen'
-        ),
     ])
