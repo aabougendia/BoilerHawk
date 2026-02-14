@@ -157,9 +157,9 @@ These are set automatically by `setup_ardupilot.sh`:
 
 ```bash
 export GZ_VERSION=harmonic
-export GZ_SIM_SYSTEM_PLUGIN_PATH=$HOME/gz_ws/src/ardupilot_gazebo/build:${GZ_SIM_SYSTEM_PLUGIN_PATH}
-export GZ_SIM_RESOURCE_PATH=$HOME/gz_ws/src/ardupilot_gazebo/models:$HOME/gz_ws/src/ardupilot_gazebo/worlds:${GZ_SIM_RESOURCE_PATH}
-export GZ_SIM_RESOURCE_PATH=/opt/ros/jazzy/share:$HOME/boilerHawk_ws/src/sim_models/models:${GZ_SIM_RESOURCE_PATH}
+export GZ_SIM_SYSTEM_PLUGIN_PATH=$HOME/ardupilot_gazebo/build:${GZ_SIM_SYSTEM_PLUGIN_PATH}
+export GZ_SIM_RESOURCE_PATH=$HOME/ardupilot_gazebo/models:$HOME/ardupilot_gazebo/worlds:${GZ_SIM_RESOURCE_PATH}
+export GZ_SIM_RESOURCE_PATH=/opt/ros/jazzy/share:$HOME/BoilerHawk/BoilerHawk/src/sim_models/models:${GZ_SIM_RESOURCE_PATH}
 ```
 
 ## Troubleshooting
@@ -168,7 +168,7 @@ export GZ_SIM_RESOURCE_PATH=/opt/ros/jazzy/share:$HOME/boilerHawk_ws/src/sim_mod
 ```bash
 # Verify environment variables
 echo $GZ_SIM_RESOURCE_PATH
-# Should include ~/gz_ws/src/ardupilot_gazebo/models
+# Should include ~/ardupilot_gazebo/models
 
 # Source your bashrc
 source ~/.bashrc
