@@ -1,9 +1,10 @@
 <?xml version="1.0"?>
-<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd"
+            schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>control</name>
-  <version>0.0.0</version>
-  <description>Control module for drone navigation interfacing with ArduPilot via MAVROS</description>
+  <version>0.1.0</version>
+  <description>Control module for drone navigation — direct MAVLink via pymavlink</description>
   <maintainer email="aabugendia@gmail.com">aabougen</maintainer>
   <license>MIT</license>
 
@@ -11,7 +12,7 @@
   <depend>nav_msgs</depend>
   <depend>geometry_msgs</depend>
   <depend>std_msgs</depend>
-  <depend>mavros_msgs</depend>
+  <!-- mavros_msgs REMOVED — using pymavlink directly -->
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>

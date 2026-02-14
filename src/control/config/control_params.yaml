@@ -2,18 +2,21 @@ control_node:
   ros__parameters:
     # Distance threshold to consider a waypoint reached (meters)
     waypoint_threshold: 0.5
-    
-    # Frequency for publishing setpoints to MAVROS (Hz)
-    # IMPORTANT: Must be high enough to maintain GUIDED mode control
+
+    # Frequency for publishing setpoints to ArduPilot (Hz)
     setpoint_rate: 20.0
-    
-    # Automatically arm the drone when ready
-    # WARNING: Set to false for initial testing
-    auto_arm: false
-    
+
+    # Automatically arm the drone when connected
+    auto_arm: true
+
     # Automatically switch to GUIDED mode when connected
     auto_mode_switch: true
-    
+
     # Target altitude for all waypoints (meters)
-    # This overrides the Z component from the planning path
     target_altitude: 2.0
+
+    # MAVLink connection string (ArduPilot SITL default)
+    fcu_connection: "tcp:127.0.0.1:5760"
+
+    # MAVLink receive polling rate (Hz)
+    mavlink_poll_rate: 50.0

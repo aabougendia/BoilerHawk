@@ -15,11 +15,11 @@ setup(
         (os.path.join('share', package_name, 'launch'), glob('launch/*.py')),
         (os.path.join('share', package_name, 'config'), glob('config/*.yaml')),
     ],
-    install_requires=['setuptools'],
+    install_requires=['setuptools', 'pymavlink'],
     zip_safe=True,
     maintainer='aabougen',
     maintainer_email='aabugendia@gmail.com',
-    description='Control module for drone navigation interfacing with ArduPilot via MAVROS',
+    description='Control module for drone navigation — direct MAVLink via pymavlink',
     license='MIT',
     tests_require=['pytest'],
     entry_points={
