@@ -1,0 +1,12 @@
+# BoilerHawk Python dependencies
+# Install: pip install --break-system-packages -r requirements.txt
+# (--break-system-packages needed on Ubuntu 24.04 for system Python used by ROS 2)
+#
+# ROS 2 packages (rclpy, nav_msgs, geometry_msgs, std_msgs, sensor_msgs,
+# cv_bridge, sensor_msgs_py, etc.) are installed via apt, not pip.
+
+pymavlink>=2.4.49
+numpy>=1.26.4
+opencv-python>=4.6.0
+setuptools
+pytest
