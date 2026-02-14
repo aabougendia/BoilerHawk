@@ -18,7 +18,7 @@ def generate_launch_description():
             arguments=[
                 '/camera/image@sensor_msgs/msg/Image@gz.msgs.Image',
                 '/camera/depth_image@sensor_msgs/msg/Image@gz.msgs.Image',
-                '/camera/points@sensor_msgs/msg/PointCloudPacked@gz.msgs.PointCloudPacked'
+                '/camera/points@sensor_msgs/msg/PointCloud2@gz.msgs.PointCloudPacked'
             ],
             output='screen'
         )
