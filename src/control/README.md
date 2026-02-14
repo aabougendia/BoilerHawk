@@ -195,7 +195,7 @@ control_node:
 > **Continuous Control**: The setpoint publisher runs continuously at 20Hz. This is essential for GUIDED mode and cannot be interrupted without losing control.
 
 > [!CAUTION]
-> **Coordinate Frames**: The control node uses LOCAL position setpoints (NED frame) relative to the home position. Ensure your planning module outputs paths in the same frame.
+> **Coordinate Frames**: The control node uses LOCAL position setpoints (ENU frame via MAVROS) relative to the home position. Ensure your planning module outputs paths in the same frame.
 
 ## Testing
 

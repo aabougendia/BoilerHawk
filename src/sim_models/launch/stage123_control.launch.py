@@ -14,7 +14,7 @@ Composes:
 
 import os
 from launch import LaunchDescription
-from launch.actions import ExecuteProcess, TimerAction
+from launch.actions import ExecuteProcess, SetEnvironmentVariable, TimerAction
 from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
 
@@ -23,6 +23,21 @@ def generate_launch_description():
     pkg_sim_models = get_package_share_directory('sim_models')
     pkg_control = get_package_share_directory('control')
 
+    # Paths to model directories that Gazebo needs
+    local_models_dir = os.path.join(pkg_sim_models, 'models')
+    ardupilot_models_dir = os.path.expanduser('~/ardupilot_gazebo/models')
+    ardupilot_plugin_dir = os.path.expanduser('~/ardupilot_gazebo/build')
+
+    # Build GZ_SIM_RESOURCE_PATH: existing env + our models + ardupilot models
+    existing_resource = os.environ.get('GZ_SIM_RESOURCE_PATH', '')
+    resource_path = os.pathsep.join(
+        p for p in [existing_resource, local_models_dir, ardupilot_models_dir] if p
+    )
+    existing_plugin = os.environ.get('GZ_SIM_SYSTEM_PLUGIN_PATH', '')
+    plugin_path = os.pathsep.join(
+        p for p in [existing_plugin, ardupilot_plugin_dir] if p
+    )
+
     world_path = os.path.join(
         pkg_sim_models, 'worlds', 'outdoor_world_ardupilot.sdf'
     )
@@ -30,6 +45,14 @@ def generate_launch_description():
     control_config = os.path.join(pkg_control, 'config', 'control_params.yaml')
 
     # ============ Stage 1: Gazebo + Bridges + TF ============
+
+    # Set Gazebo environment variables so model:// URIs resolve
+    set_resource_path = SetEnvironmentVariable(
+        name='GZ_SIM_RESOURCE_PATH', value=resource_path,
+    )
+    set_plugin_path = SetEnvironmentVariable(
+        name='GZ_SIM_SYSTEM_PLUGIN_PATH', value=plugin_path,
+    )
 
     gazebo = ExecuteProcess(
         cmd=['gz', 'sim', world_path, '-r'],
@@ -156,6 +179,9 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
+        # Environment variables for Gazebo model resolution
+        set_resource_path,
+        set_plugin_path,
         # Stage 1
         gazebo,
         bridge_camera_image,
