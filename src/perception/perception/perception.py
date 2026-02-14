@@ -12,8 +12,8 @@ class PerceptionNode(Node):
         super().__init__('perception_node')
 
         # --- Parameters ---
-        self.declare_parameter('pointcloud_topic', '/camera/depth/color/points')
-        self.declare_parameter('occupancy_topic', '/perception/occupancy')
+        self.declare_parameter('pointcloud_topic', '/camera/points')
+        self.declare_parameter('occupancy_topic', '/occupancy_grid')
         self.declare_parameter('resolution', 0.1)
         self.declare_parameter('max_range', 5.0)
         self.declare_parameter('grid_frame', 'map')
