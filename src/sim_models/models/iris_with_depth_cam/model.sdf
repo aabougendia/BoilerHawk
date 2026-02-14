@@ -219,11 +219,5 @@
       <child>air_pressure_link</child>
     </joint>
 
-    <!-- Keyboard teleop plugin -->
-    <plugin filename="gz-sim-velocity-control-system" name="gz::sim::systems::VelocityControl">
-      <initial_linear>0.0 0.0 0.0</initial_linear>
-      <initial_angular>0.0 0.0 0.0</initial_angular>
-    </plugin>
-
   </model>
 </sdf>
