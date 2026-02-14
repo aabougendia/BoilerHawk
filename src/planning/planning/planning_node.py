@@ -116,9 +116,9 @@ class PlanningNode(Node):
         self.occupancy_grid_received = True
         self.get_logger().info(f'Occupancy grid received: {width}x{height}, resolution: {resolution}')
         
-        # Trigger global path planning if not done yet
-        if not self.global_path_computed:
-            self.compute_global_path()
+        # Recompute global path on every grid update so grid coordinates
+        # always match the current (drone-centred) grid origin.
+        self.compute_global_path()
     
     def pose_callback(self, msg: PoseStamped):
         """

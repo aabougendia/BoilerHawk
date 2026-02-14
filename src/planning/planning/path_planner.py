@@ -275,8 +275,10 @@ class PathPlanner:
                         break
                 
                 if next_goal:
-                    # Replan local segment
+                    # Replan local segment WITHOUT overwriting global_path
+                    saved_global = self.global_path
                     replanned = self.plan_global_path(current_position, next_goal)
+                    self.global_path = saved_global  # restore
                     if replanned:
                         self.local_path = replanned[:lookahead_distance]
                         return self.local_path
@@ -292,6 +294,8 @@ class PathPlanner:
         """
         Convert grid coordinates to world coordinates.
         
+        Grid uses standard ROS convention: row 0 = bottom (lowest y).
+        
         Args:
             grid_pos: (row, col) in grid
             
@@ -300,20 +304,25 @@ class PathPlanner:
         """
         row, col = grid_pos
         x = self.grid_origin[0] + col * self.grid_resolution
-        y = self.grid_origin[1] + (self.grid_height - row) * self.grid_resolution
+        y = self.grid_origin[1] + row * self.grid_resolution
         return (x, y)
     
     def world_to_grid(self, world_pos: Tuple[float, float]) -> Tuple[int, int]:
         """
         Convert world coordinates to grid coordinates.
         
+        Grid uses standard ROS convention: row 0 = bottom (lowest y).
+        
         Args:
             world_pos: (x, y) in world frame
             
         Returns:
-            (row, col) in grid
+            (row, col) in grid, clamped to valid bounds
         """
         x, y = world_pos
         col = int((x - self.grid_origin[0]) / self.grid_resolution)
-        row = self.grid_height - int((y - self.grid_origin[1]) / self.grid_resolution)
+        row = int((y - self.grid_origin[1]) / self.grid_resolution)
+        # Clamp to valid grid bounds
+        row = max(0, min(row, self.grid_height - 1))
+        col = max(0, min(col, self.grid_width - 1))
         return (row, col)
