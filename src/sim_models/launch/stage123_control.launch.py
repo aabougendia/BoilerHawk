@@ -82,6 +82,20 @@ def generate_launch_description():
         output='screen',
     )
 
+    # Dynamic TF: odom → base_link (from MAVROS pose) + republish /current_pose
+    mavros_tf_broadcaster = Node(
+        package='sensors_interface',
+        executable='mavros_tf_broadcaster',
+        name='mavros_tf_broadcaster',
+        parameters=[
+            {'parent_frame': 'odom'},
+            {'child_frame': 'base_link'},
+            {'mavros_pose_topic': '/mavros/local_position/pose'},
+            {'current_pose_topic': '/current_pose'},
+        ],
+        output='screen',
+    )
+
     # RViz (delayed to let bridges start)
     rviz = TimerAction(
         period=3.0,
@@ -104,9 +118,10 @@ def generate_launch_description():
         parameters=[
             {'pointcloud_topic': '/depth_camera/points'},
             {'occupancy_topic': '/occupancy_grid'},
+            {'pose_topic': '/mavros/local_position/pose'},
             {'resolution': 0.1},
             {'max_range': 5.0},
-            {'grid_frame': 'world'},
+            {'grid_frame': 'map'},
         ],
         output='screen',
     )
@@ -148,6 +163,7 @@ def generate_launch_description():
         bridge_camera_points,
         bridge_camera_info,
         static_tf_world_odom,
+        mavros_tf_broadcaster,
         rviz,
         # Stage 2
         perception_node,

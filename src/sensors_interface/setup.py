@@ -33,6 +33,7 @@ setup(
         'console_scripts': [
             'depth_camera_node = sensors_interface.camera_listener:main',
             'drone_teleop_key = sensors_interface.drone_teleop_key:main',
+            'mavros_tf_broadcaster = sensors_interface.mavros_tf_broadcaster:main',
         ],
     },
 )
