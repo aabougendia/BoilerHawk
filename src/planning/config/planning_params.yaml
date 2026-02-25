@@ -2,18 +2,38 @@
 
 planning_node:
   ros__parameters:
+    # Topic names (configurable for real perception / localization)
+    occupancy_topic: '/occupancy_grid'   # Use '/perception/occupancy' when running real perception
+    pose_topic: '/current_pose'          # Use '/mavlink/local_position/pose' for real drone pose
+    path_frame: 'map'                    # Frame ID for published paths (match occupancy grid frame)
+
     # Occupancy grid processing
     occupancy_threshold: 50  # 0-100, cells above this are considered occupied
-    
+
     # Path planning parameters
     lookahead_distance: 20  # Number of cells to look ahead for local path
     planning_frequency: 2.0  # Hz, how often to update local path
-    
-    # Start and goal positions (in world coordinates, meters)
+
+    # Fallback start and goal (used when pose not yet available; goal can stay from params)
     start_x: 1.0
     start_y: 1.0
-    goal_x: 8.0
-    goal_y: 8.0
+    goal_x: 0.0
+    goal_y: -20.0
+
+    # Avoid-only mode: no fixed goal; drone flies forward avoiding obstacles (testing)
+    avoid_only: false
+    goal_ahead_distance: 5.0
+    # Robot-centric grid: when true, occupancy is treated as centered on drone (perception style)
+    use_robot_centric_grid: true
+
+    # VFH obstacle avoidance
+    safety_radius_cells: 3       # inflation radius (cells)
+    num_sectors: 72              # angular resolution (5 deg each)
+    valley_threshold: 0.5        # histogram threshold for blocked/free
+    num_waypoints: 3             # waypoints per plan cycle
+    waypoint_spacing: 1.0        # metres between waypoints
+    goal_reached_threshold: 1.0  # metres; stop when this close to B
+    heading_ema_alpha: 0.3       # EMA filter: 0.3*new + 0.7*prev (smooth heading)
 
 mock_perception_node:
   ros__parameters:

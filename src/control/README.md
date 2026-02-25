@@ -30,8 +30,9 @@ control/
 ├── config/
 │   └── control_params.yaml      # Configuration parameters
 ├── launch/
-│   ├── control.launch.py        # Launch control node only
-│   └── full_system.launch.py    # Launch with perception
+│   ├── control.launch.py           # Launch control node only
+│   ├── full_system.launch.py        # Mock perception + planning + control
+│   └── full_autonomous.launch.py    # Real perception + planning + control
 ├── test/
 │   └── test_control.py          # Unit tests
 ├── package.xml
@@ -75,9 +76,19 @@ sim_vehicle.py --console --map
 # Terminal 2: Launch MAVROS
 ros2 launch mavros apm.launch fcu_url:=udp://:14550@127.0.0.1:14555
 
-# Terminal 3: Launch full system (perception + control)
+# Terminal 3: Launch full system (mock perception + planning + control)
 ros2 launch control full_system.launch.py
+```
 
+For the **full autonomous pipeline** (real perception from depth camera + planning + control), start Gazebo with depth camera and bridges, then SITL, then:
+
+```bash
+ros2 launch control full_autonomous.launch.py
+```
+
+Planning will subscribe to `/perception/occupancy` and `/mavlink/local_position/pose`; control receives waypoints from planning.
+
+```bash
 # Terminal 4: Monitor status
 ros2 topic echo /control/status
 ```

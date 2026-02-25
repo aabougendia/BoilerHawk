@@ -13,3 +13,29 @@ EK3_SRC1_POSZ   1
 EK3_SRC1_VELXY  3
 EK3_SRC1_VELZ   3
 EK3_SRC1_YAW    1
+
+# ── Proximity sensor: receive OBSTACLE_DISTANCE from companion ───
+PRX1_TYPE       2               # MAVLink proximity
+PRX1_ORIENT     0               # forward
+
+# ── Object Avoidance: BendyRuler ─────────────────────────────────
+OA_TYPE         1               # BendyRuler
+OA_BR_LOOKAHEAD 5.0             # probe 5m ahead for obstacles
+OA_MARGIN_MAX   2.0             # desired clearance from obstacles (m)
+
+# ── Simple avoidance (Stop/Slide) for Loiter/AltHold ─────────────
+AVOID_ENABLE    7               # all sources (proximity + fence + GCS)
+AVOID_MARGIN    1.5             # stop/slide margin (m)
+
+# ── Gentle navigation limits ─────────────────────────────────────
+WPNAV_SPEED     150             # 1.5 m/s max horizontal (cm/s)
+WPNAV_ACCEL     100             # gentle horizontal accel (cm/s/s)
+WPNAV_ACCEL_C   100             # gentle cornering accel
+WPNAV_JERK      5               # smooth jerk limit
+
+# ── Boost throttle when leaning (prevents altitude drop in turns) ─
+ATC_ANGLE_BOOST 1
+
+# ── Limit roll/pitch aggressiveness ──────────────────────────────
+ATC_ACCEL_R_MAX 60000           # softer roll accel (cdeg/s/s)
+ATC_ACCEL_P_MAX 60000           # softer pitch accel

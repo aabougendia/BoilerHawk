@@ -1,22 +1,38 @@
 control_node:
   ros__parameters:
-    # Distance threshold to consider a waypoint reached (meters)
-    waypoint_threshold: 0.5
-
-    # Frequency for publishing setpoints to ArduPilot (Hz)
+    # Setpoint / MAVLink rates
     setpoint_rate: 20.0
+    mavlink_poll_rate: 50.0
+    obstacle_distance_rate: 10.0
 
-    # Automatically arm the drone when connected
+    # Auto-control
     auto_arm: true
-
-    # Automatically switch to GUIDED mode when connected
     auto_mode_switch: true
+    target_altitude: 1.0
 
-    # Target altitude for all waypoints (meters)
-    target_altitude: 2.0
-
-    # MAVLink connection string (ArduPilot SITL default)
+    # MAVLink connection
     fcu_connection: "tcp:127.0.0.1:5760"
 
-    # MAVLink receive polling rate (Hz)
-    mavlink_poll_rate: 50.0
+    # Occupancy grid topic (from perception)
+    occupancy_topic: "/perception/occupancy"
+
+    # Navigation mode
+    avoid_only: true
+    goal_x: 0.0
+    goal_y: -20.0
+    goal_reached_threshold: 1.0
+
+    # VFH params
+    safety_radius_cells: 3
+    valley_threshold: 0.5
+
+    # Speed tiers (m/s)
+    max_speed: 1.5              # straight (<15 deg)
+    turn_speed_medium: 0.8      # 15-35 deg
+    turn_speed_sharp: 0.3       # >35 deg
+
+    # Heading EMA filter (0=frozen, 1=no filter)
+    heading_ema_alpha: 0.3
+
+    # A* path planner
+    astar_lookahead_cells: 15    # how many cells ahead on A* path to aim for

@@ -3,9 +3,10 @@
 Unit tests for path planner module using hypothetical data.
 """
 
+import math
 import unittest
 import numpy as np
-from planning.path_planner import PathPlanner, Node
+from planning.path_planner import PathPlanner, Node, VFHPlanner
 
 
 class TestNode(unittest.TestCase):
@@ -335,6 +336,153 @@ class TestHypotheticalScenarios(unittest.TestCase):
                 self.assertTrue(planner.is_valid_cell(pos))
 
 
+class TestVFHPlanner(unittest.TestCase):
+    """Test cases for VFHPlanner (Vector Field Histogram)."""
+
+    def _make_planner(self, **kwargs):
+        defaults = dict(
+            occupancy_threshold=50,
+            safety_radius_cells=0,
+            num_sectors=72,
+            valley_threshold=0.5,
+            num_waypoints=3,
+            waypoint_spacing=1.0,
+        )
+        defaults.update(kwargs)
+        return VFHPlanner(**defaults)
+
+    def _empty_grid(self, size=100, resolution=0.1):
+        grid = np.zeros((size, size), dtype=np.int8)
+        planner = self._make_planner()
+        origin = (-(size * resolution) / 2, -(size * resolution) / 2)
+        planner.update_occupancy_grid(grid, resolution, origin)
+        return planner, grid
+
+    # --- No obstacles ---
+
+    def test_no_obstacles_preferred_ahead(self):
+        """With no obstacles, VFH should return waypoints along the preferred direction (ahead)."""
+        planner, _ = self._empty_grid()
+        waypoints, _ = planner.plan(preferred_angle_rad=0.0)
+        self.assertEqual(len(waypoints), 3)
+        centre_col = planner.grid_width // 2
+        for row, col in waypoints:
+            self.assertGreater(col, centre_col)
+
+    def test_no_obstacles_preferred_45(self):
+        """With no obstacles, preferred = 45 deg -> waypoints move up-right."""
+        planner, _ = self._empty_grid()
+        waypoints, _ = planner.plan(preferred_angle_rad=math.pi / 4)
+        self.assertEqual(len(waypoints), 3)
+        centre_row = planner.grid_height // 2
+        centre_col = planner.grid_width // 2
+        for row, col in waypoints:
+            self.assertGreater(col, centre_col)
+            self.assertLess(row, centre_row)
+
+    # --- Wall ahead ---
+
+    def test_wall_ahead_steers_away(self):
+        """With a wide wall directly ahead, VFH should steer left or right."""
+        planner, grid = self._empty_grid()
+        cr = planner.grid_height // 2
+        cc = planner.grid_width // 2
+        # Thick wall covering most of the forward half
+        grid[cr - 20:cr + 20, cc + 3:cc + 30] = 100
+        planner.update_occupancy_grid(grid, planner.grid_resolution, planner.grid_origin)
+
+        waypoints, _ = planner.plan(preferred_angle_rad=0.0)
+        self.assertGreater(len(waypoints), 0)
+        # Chosen direction should deviate significantly from straight ahead
+        final_row = waypoints[-1][0]
+        final_col = waypoints[-1][1]
+        deviation = abs(final_row - cr) + abs(final_col - cc)
+        self.assertGreater(deviation, 3)
+
+    # --- Wall on left ---
+
+    def test_wall_on_left_steers_right_or_ahead(self):
+        """With a wall on the upper-left, preferred ahead -> waypoints go ahead or downward."""
+        planner, grid = self._empty_grid()
+        cr = planner.grid_height // 2
+        cc = planner.grid_width // 2
+        # Wall covers the entire upper-left + upper-ahead quadrant
+        grid[0:cr - 1, cc - 10:cc + 30] = 100
+        planner.update_occupancy_grid(grid, planner.grid_resolution, planner.grid_origin)
+
+        waypoints, _ = planner.plan(preferred_angle_rad=0.0)
+        self.assertGreater(len(waypoints), 0)
+        # The direction should steer downward (higher row index) or stay near centre;
+        # allow some margin because VFH valley centre can graze the wall edge
+        for row, _ in waypoints:
+            self.assertGreaterEqual(row, cr - 5)
+
+    # --- Inflation ---
+
+    def test_inflation_grows_obstacles(self):
+        """After inflation, obstacles should be larger than the original."""
+        planner = self._make_planner(safety_radius_cells=3)
+        grid = np.zeros((50, 50), dtype=np.int8)
+        grid[25, 25] = 100
+        inflated = planner.inflate_grid(grid)
+        original_count = int((grid >= 50).sum())
+        inflated_count = int((inflated >= 50).sum())
+        self.assertGreater(inflated_count, original_count)
+
+    def test_inflation_zero_radius_unchanged(self):
+        """With radius=0, inflated grid should equal the thresholded original."""
+        planner = self._make_planner(safety_radius_cells=0)
+        grid = np.zeros((20, 20), dtype=np.int8)
+        grid[10, 10] = 100
+        inflated = planner.inflate_grid(grid)
+        self.assertEqual(int((inflated >= 50).sum()), 1)
+
+    # --- Goal bearing ---
+
+    def test_goal_bearing_guides_direction(self):
+        """When preferred = ~90 deg (up in grid), waypoints should move upward."""
+        planner, _ = self._empty_grid()
+        waypoints, _ = planner.plan(preferred_angle_rad=math.pi / 2)
+        self.assertGreater(len(waypoints), 0)
+        centre_row = planner.grid_height // 2
+        for row, _ in waypoints:
+            self.assertLess(row, centre_row)
+
+    # --- Fully surrounded ---
+
+    def test_fully_surrounded_still_returns_waypoints(self):
+        """Even when fully surrounded, VFH always returns waypoints (no failure)."""
+        planner, grid = self._empty_grid(size=30)
+        cr = planner.grid_height // 2
+        cc = planner.grid_width // 2
+        grid[:cr - 1, :] = 100
+        grid[cr + 2:, :] = 100
+        grid[:, :cc - 1] = 100
+        grid[:, cc + 2:] = 100
+        planner.update_occupancy_grid(grid, planner.grid_resolution, planner.grid_origin)
+
+        waypoints, _ = planner.plan(preferred_angle_rad=0.0)
+        self.assertGreater(len(waypoints), 0)
+
+    # --- Narrow gap ---
+
+    def test_narrow_gap_preferred_aligned(self):
+        """A narrow gap aligned with preferred direction should be picked."""
+        planner = self._make_planner(safety_radius_cells=0)
+        size = 100
+        grid = np.zeros((size, size), dtype=np.int8)
+        cr, cc = size // 2, size // 2
+        grid[cr - 15:cr - 2, cc + 3:cc + 20] = 100
+        grid[cr + 2:cr + 15, cc + 3:cc + 20] = 100
+        origin = (-(size * 0.1) / 2, -(size * 0.1) / 2)
+        planner.update_occupancy_grid(grid, 0.1, origin)
+
+        waypoints, _ = planner.plan(preferred_angle_rad=0.0)
+        self.assertGreater(len(waypoints), 0)
+        for row, col in waypoints:
+            self.assertGreater(col, cc)
+
+
 def run_tests():
     """Run all unit tests."""
     # Create test suite
@@ -345,6 +493,7 @@ def run_tests():
     suite.addTests(loader.loadTestsFromTestCase(TestNode))
     suite.addTests(loader.loadTestsFromTestCase(TestPathPlanner))
     suite.addTests(loader.loadTestsFromTestCase(TestHypotheticalScenarios))
+    suite.addTests(loader.loadTestsFromTestCase(TestVFHPlanner))
     
     # Run tests
     runner = unittest.TextTestRunner(verbosity=2)

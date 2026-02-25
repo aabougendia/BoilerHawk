@@ -1,14 +1,14 @@
-# Perception Module
+# Planning Module
 
-A ROS 2 perception package for path planning with occupancy grid processing.
+A ROS 2 planning package for path planning and obstacle avoidance. Consumes occupancy grids from the perception module and current pose from localization (or FCU), and publishes waypoint paths to the control node.
 
 ## Overview
 
-This package implements a perception system that:
-- Receives occupancy grids from a planning module
-- Computes global paths using A* algorithm
-- Updates local paths dynamically based on occupancy changes
-- Handles obstacle avoidance and dynamic replanning
+This package implements the planning layer for autonomous flight:
+- **Inputs**: Occupancy grid from perception (depth camera → occupancy), current pose from localization / FCU
+- **Outputs**: Global and local paths (waypoints) on `/global_path` and `/local_path` for the control node
+- Uses current drone pose as **dynamic start** when available; goal from parameters (or future mission topic)
+- Obstacle avoidance via A* global planning and local replanning when obstacles are detected
 
 ## Features
 
@@ -18,25 +18,24 @@ This package implements a perception system that:
 - **Coordinate Conversion**: Handles grid ↔ world coordinate transformations
 - **Visualization**: Publishes path markers for RViz visualization
 
+## Data Flow
+
+- **Sensors** (e.g. depth camera) → **Perception** (point cloud → occupancy grid) → **Planning** (this package: occupancy + pose → paths) → **Control** (paths → position commands → FCU).
+- The **sensors_interface** and simulation expose camera/depth topics; the **perception** package consumes them and publishes an occupancy grid. Planning subscribes to that grid and to the current pose; it does not subscribe to raw sensors directly.
+
 ## Package Structure
 
 ```
-perception/
-├── perception/
+planning/
+├── planning/
 │   ├── __init__.py
 │   ├── path_planner.py          # Core A* path planning algorithm
-│   ├── perception_node.py       # Main ROS 2 perception node
-│   └── mock_planning_node.py    # Mock node for testing
+│   ├── planning_node.py        # ROS 2 planning node
+│   └── mock_perception_node.py # Mock node for testing (generates occupancy + pose)
 ├── test/
-│   ├── test_path_planner.py     # Unit tests with hypothetical data
-│   ├── test_copyright.py
-│   ├── test_flake8.py
-│   └── test_pep257.py
 ├── launch/
-│   ├── perception_test.launch.py      # Launch with static obstacles
-│   └── perception_dynamic.launch.py   # Launch with dynamic obstacles
 ├── config/
-│   └── perception_params.yaml   # Configuration parameters
+│   └── planning_params.yaml
 ├── package.xml
 ├── setup.py
 └── README.md
@@ -57,7 +56,7 @@ perception/
 cd ~/ros2_ws
 
 # Build the package
-colcon build --packages-select perception
+colcon build --packages-select planning
 
 # Source the workspace
 source install/setup.bash
@@ -71,44 +70,36 @@ Test the path planning algorithms with hypothetical data:
 
 ```bash
 # Run comprehensive unit tests
-python3 src/perception/test/test_path_planner.py
+python3 src/planning/test/test_path_planner.py
 
 # Or use pytest
-pytest src/perception/test/test_path_planner.py -v
+pytest src/planning/test/test_path_planner.py -v
 ```
 
 ### Running with Mock Data
 
-Launch the perception node with a mock planning node that generates test occupancy grids:
+Launch the planning node with a mock perception node that generates test occupancy grids and pose:
 
 ```bash
 # Static obstacles test
-ros2 launch perception perception_test.launch.py
+ros2 launch planning planning_test.launch.py
 
 # Dynamic obstacles test
-ros2 launch perception perception_dynamic.launch.py
+ros2 launch planning planning_dynamic.launch.py
 ```
 
-### Running Standalone Node
+### Running with Real Perception and Drone Pose
 
-```bash
-# Start the perception node
-ros2 run perception perception_node
-
-# In another terminal, start the mock planning node
-ros2 run perception mock_planning_node
-```
+Use the full autonomous launch (see control package) so that planning receives `/perception/occupancy` and `/mavlink/local_position/pose`. Configure `occupancy_topic` and `pose_topic` in `config/planning_params.yaml` or via launch parameters.
 
 ## ROS 2 Interface
 
-### Subscribed Topics
+### Subscribed Topics (configurable via parameters)
 
-- `/occupancy_grid` (`nav_msgs/OccupancyGrid`)
-  - Occupancy grid from planning module
-  - Values: 0-100 (probability of occupancy), -1 (unknown)
+- `occupancy_topic` (default `/occupancy_grid`): set to `/perception/occupancy` when using the real perception node.
+- `pose_topic` (default `/current_pose`): set to `/mavlink/local_position/pose` to use real drone pose from the control/FCU stack.
 
-- `/current_pose` (`geometry_msgs/PoseStamped`)
-  - Current robot pose for local path planning
+Message types: `nav_msgs/OccupancyGrid` (0–100 occupancy, -1 unknown), `geometry_msgs/PoseStamped` (current position for local planning and dynamic start).
 
 ### Published Topics
 
@@ -127,20 +118,20 @@ ros2 run perception mock_planning_node
 
 ### Parameters
 
-- `occupancy_threshold` (int, default: 50)
-  - Threshold for considering a cell occupied (0-100)
+- `occupancy_topic` (string, default `/occupancy_grid`): Topic for occupancy grid. Use `/perception/occupancy` with real perception.
+- `pose_topic` (string, default `/current_pose`): Topic for current pose. Use `/mavlink/local_position/pose` for real drone pose.
+- `path_frame` (string, default `map`): Frame ID for published paths. Must match the frame of the occupancy grid (see Coordinate frames below).
+- `occupancy_threshold` (int, default: 50): Threshold for considering a cell occupied (0–100).
+- `lookahead_distance` (int, default: 20): Number of cells to look ahead for local path planning.
+- `planning_frequency` (double, default: 2.0): Frequency (Hz) for local path updates.
+- `start_x`, `start_y` (double): Fallback start in world coordinates when pose is not yet available.
+- `goal_x`, `goal_y` (double): Goal position in world coordinates (meters).
 
-- `lookahead_distance` (int, default: 20)
-  - Number of cells to look ahead for local path planning
+## Coordinate Frames
 
-- `planning_frequency` (double, default: 2.0)
-  - Frequency (Hz) for local path updates
-
-- `start_x`, `start_y` (double)
-  - Starting position in world coordinates (meters)
-
-- `goal_x`, `goal_y` (double)
-  - Goal position in world coordinates (meters)
+- **path_frame**: All published paths use this frame. It should match the frame of the occupancy grid.
+- **World-frame (Option A)**: Perception publishes occupancy in a fixed world frame (e.g. `map`), using TF (world → odom → base_link → camera). Planning then uses `path_frame: map` and world-frame start/goal. Best when you have a consistent world map and localization.
+- **Robot-centric (Option B)**: Perception publishes a robot-centric grid (e.g. camera link frame). Planning would use the same frame and short-horizon relative goals; start is at the robot. For full autonomous pipeline with a single world map, prefer Option A and configure perception to publish in `map` when TF is available.
 
 ## Algorithm Details
 
@@ -184,7 +175,7 @@ The package includes comprehensive unit tests covering:
 
 Run tests with:
 ```bash
-python3 src/perception/test/test_path_planner.py
+python3 src/planning/test/test_path_planner.py
 ```
 
 ## Visualization
@@ -204,30 +195,31 @@ rviz2
 
 ## Configuration
 
-Edit `config/perception_params.yaml` to customize parameters:
+Edit `config/planning_params.yaml` to customize parameters. For real perception and drone pose, set:
 
 ```yaml
-perception_node:
+planning_node:
   ros__parameters:
+    occupancy_topic: '/perception/occupancy'
+    pose_topic: '/mavlink/local_position/pose'
+    path_frame: 'map'
     occupancy_threshold: 50
     lookahead_distance: 20
     planning_frequency: 2.0
-    start_x: 1.0
-    start_y: 1.0
     goal_x: 8.0
     goal_y: 8.0
 ```
 
-## Mock Planning Node
+## Mock Perception Node
 
-The mock planning node generates test occupancy grids with:
+The mock perception node (in this package) generates test occupancy grids and a fake current pose with:
 
 - **Static Obstacles**: Walls, barriers, scattered obstacles
 - **Dynamic Obstacles** (optional): Moving obstacles for testing adaptation
 - **Grid Size**: Configurable dimensions and resolution
 - **Publishing Frequency**: Configurable update rate
 
-This allows testing the perception module independently from the actual planning module.
+This allows testing the planning module without running real perception or a drone.
 
 ## Future Enhancements
 

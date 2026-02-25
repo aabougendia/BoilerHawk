@@ -1,8 +1,11 @@
 """
-Path planning utilities for perception module.
-Implements A* algorithm for global path planning and local path refinement.
+Path planning utilities.
+Implements:
+  - A* algorithm for global path planning (PathPlanner)
+  - Vector Field Histogram for reactive obstacle avoidance (VFHPlanner)
 """
 
+import math
 import numpy as np
 from typing import List, Tuple, Optional
 import heapq
@@ -317,3 +320,264 @@ class PathPlanner:
         col = int((x - self.grid_origin[0]) / self.grid_resolution)
         row = self.grid_height - int((y - self.grid_origin[1]) / self.grid_resolution)
         return (row, col)
+
+
+# =====================================================================
+#  VFH (Vector Field Histogram) Planner
+# =====================================================================
+
+class VFHPlanner:
+    """
+    Reactive obstacle avoidance using the Vector Field Histogram algorithm.
+
+    Works on a robot-centric occupancy grid (drone at centre).  Always
+    produces a steering direction — never returns "no path found".
+    """
+
+    def __init__(
+        self,
+        occupancy_threshold: int = 50,
+        safety_radius_cells: int = 3,
+        num_sectors: int = 72,
+        valley_threshold: float = 0.5,
+        num_waypoints: int = 3,
+        waypoint_spacing: float = 1.0,
+    ):
+        self.occupancy_threshold = occupancy_threshold
+        self.safety_radius_cells = safety_radius_cells
+        self.num_sectors = num_sectors
+        self.valley_threshold = valley_threshold
+        self.num_waypoints = num_waypoints
+        self.waypoint_spacing = waypoint_spacing
+
+        self.occupancy_grid: Optional[np.ndarray] = None
+        self.grid_resolution: float = 0.1
+        self.grid_width: int = 0
+        self.grid_height: int = 0
+        self.grid_origin: Tuple[float, float] = (0.0, 0.0)
+
+        self._sector_width = 2.0 * math.pi / self.num_sectors
+
+    # ----- grid bookkeeping (same interface as PathPlanner) -----------
+
+    def update_occupancy_grid(
+        self,
+        grid_data: np.ndarray,
+        resolution: float,
+        origin: Tuple[float, float],
+    ):
+        self.occupancy_grid = grid_data
+        self.grid_resolution = resolution
+        self.grid_height, self.grid_width = grid_data.shape
+        self.grid_origin = origin
+
+    def grid_to_world(self, grid_pos: Tuple[int, int]) -> Tuple[float, float]:
+        row, col = grid_pos
+        x = self.grid_origin[0] + col * self.grid_resolution
+        y = self.grid_origin[1] + (self.grid_height - row) * self.grid_resolution
+        return (x, y)
+
+    def world_to_grid(self, world_pos: Tuple[float, float]) -> Tuple[int, int]:
+        x, y = world_pos
+        col = int((x - self.grid_origin[0]) / self.grid_resolution)
+        row = self.grid_height - int((y - self.grid_origin[1]) / self.grid_resolution)
+        return (row, col)
+
+    # ----- inflation --------------------------------------------------
+
+    def inflate_grid(self, grid: np.ndarray) -> np.ndarray:
+        """Binary dilation: grow occupied cells by *safety_radius_cells*."""
+        occupied = grid >= self.occupancy_threshold
+        if self.safety_radius_cells <= 0:
+            return occupied.astype(np.int8) * 100
+
+        r = self.safety_radius_cells
+        y_k, x_k = np.ogrid[-r:r + 1, -r:r + 1]
+        kernel = (x_k * x_k + y_k * y_k) <= r * r
+
+        h, w = occupied.shape
+        inflated = np.zeros_like(occupied)
+        occ_rows, occ_cols = np.where(occupied)
+        for oi, oj in zip(occ_rows, occ_cols):
+            r0 = max(oi - r, 0)
+            r1 = min(oi + r + 1, h)
+            c0 = max(oj - r, 0)
+            c1 = min(oj + r + 1, w)
+            kr0 = r0 - (oi - r)
+            kr1 = kernel.shape[0] - ((oi + r + 1) - r1)
+            kc0 = c0 - (oj - r)
+            kc1 = kernel.shape[1] - ((oj + r + 1) - c1)
+            inflated[r0:r1, c0:c1] |= kernel[kr0:kr1, kc0:kc1]
+
+        return inflated.astype(np.int8) * 100
+
+    # ----- polar histogram --------------------------------------------
+
+    def build_polar_histogram(self, inflated_grid: np.ndarray) -> np.ndarray:
+        """
+        Build a polar obstacle-density histogram around the grid centre.
+
+        Returns an array of shape *(num_sectors,)* where each element is the
+        cumulative obstacle weight for that angular sector.
+        """
+        h, w = inflated_grid.shape
+        cr, cc = h // 2, w // 2
+        max_range_cells = max(h, w) / 2.0
+
+        histogram = np.zeros(self.num_sectors, dtype=np.float64)
+        occ_rows, occ_cols = np.where(inflated_grid >= self.occupancy_threshold)
+        if len(occ_rows) == 0:
+            return histogram
+
+        dr = occ_rows.astype(np.float64) - cr
+        dc = occ_cols.astype(np.float64) - cc
+        # angle: 0 = +col (ahead / camera +X), positive CCW
+        angles = np.arctan2(-dr, dc)  # -dr because row increases downward
+        dists = np.sqrt(dr * dr + dc * dc)
+        dists = np.maximum(dists, 1.0)
+
+        # Weight: closer obstacles count more (linear falloff)
+        a_coeff = 1.0
+        b_coeff = a_coeff / max_range_cells
+        weights = np.maximum(0.0, a_coeff - b_coeff * dists)
+
+        sector_indices = self._angle_to_sector(angles)
+        np.add.at(histogram, sector_indices, weights)
+
+        # Normalise so threshold is scale-independent
+        hist_max = histogram.max()
+        if hist_max > 0:
+            histogram /= hist_max
+
+        return histogram
+
+    # ----- valley / direction selection --------------------------------
+
+    def find_best_direction(
+        self, histogram: np.ndarray, preferred_angle: float
+    ) -> float:
+        """
+        Pick the best clear direction closest to *preferred_angle*.
+
+        Returns an angle in radians (robot frame, 0 = ahead, CCW positive).
+        """
+        free = histogram < self.valley_threshold
+        n = self.num_sectors
+
+        if free.all():
+            return preferred_angle
+        if not free.any():
+            # Fully blocked — pick the least-dense sector
+            idx = int(np.argmin(histogram))
+            return self._sector_to_angle(idx)
+
+        # Find contiguous free runs (valleys), wrapping around
+        valleys: List[Tuple[int, int]] = []  # (start_sector, length)
+        start = None
+        length = 0
+        # Double-pass to handle wrap-around
+        extended = np.concatenate([free, free])
+        for i in range(2 * n):
+            if extended[i]:
+                if start is None:
+                    start = i % n
+                length += 1
+            else:
+                if start is not None and length > 0:
+                    valleys.append((start, length))
+                start = None
+                length = 0
+        if start is not None and length > 0:
+            valleys.append((start, length))
+
+        # De-duplicate valleys that wrapped (keep the longest per start)
+        if not valleys:
+            idx = int(np.argmin(histogram))
+            return self._sector_to_angle(idx)
+
+        pref_sector = self._angle_to_sector(np.array([preferred_angle]))[0]
+        best_angle = preferred_angle
+        best_cost = float('inf')
+
+        margin = 2  # sectors of extra angular safety margin near obstacle edges
+
+        for v_start, v_len in valleys:
+            v_len = min(v_len, n)  # cap at full circle
+            
+            # If the preferred angle is within this safe valley, steer directly towards it
+            if (pref_sector - v_start) % n < v_len:
+                return preferred_angle
+
+            # Otherwise, evaluate the edges (plus margin) and the centre of the valley
+            m = min(margin, v_len // 2)
+            c1_sector = (v_start + m) % n
+            c2_sector = (v_start + v_len - 1 - m) % n
+            c3_sector = (v_start + v_len // 2) % n
+            
+            for cand_sector in [c1_sector, c2_sector, c3_sector]:
+                cand_angle = self._sector_to_angle(cand_sector)
+                cost = abs(self._angle_diff(cand_angle, preferred_angle))
+                if cost < best_cost:
+                    best_cost = cost
+                    best_angle = cand_angle
+
+        return best_angle
+
+    # ----- end-to-end plan -------------------------------------------
+
+    def plan(
+        self,
+        preferred_angle_rad: float = 0.0,
+        num_waypoints: Optional[int] = None,
+        spacing_m: Optional[float] = None,
+    ) -> Tuple[List[Tuple[int, int]], float]:
+        """
+        Run the full VFH pipeline and return a short waypoint list in
+        **grid coordinates** (row, col) together with the chosen heading.
+
+        Returns:
+            (waypoints, chosen_angle_rad)  — empty list + 0.0 when no grid.
+        """
+        if self.occupancy_grid is None:
+            return [], 0.0
+
+        nw = num_waypoints if num_waypoints is not None else self.num_waypoints
+        sp = spacing_m if spacing_m is not None else self.waypoint_spacing
+
+        inflated = self.inflate_grid(self.occupancy_grid)
+        histogram = self.build_polar_histogram(inflated)
+        chosen_angle = self.find_best_direction(histogram, preferred_angle_rad)
+
+        cr = self.grid_height // 2
+        cc = self.grid_width // 2
+        spacing_cells = sp / self.grid_resolution
+
+        waypoints: List[Tuple[int, int]] = []
+        for i in range(1, nw + 1):
+            d = i * spacing_cells
+            col = int(round(cc + d * math.cos(chosen_angle)))
+            row = int(round(cr - d * math.sin(chosen_angle)))  # -sin: row↓
+            row = max(0, min(self.grid_height - 1, row))
+            col = max(0, min(self.grid_width - 1, col))
+            waypoints.append((row, col))
+
+        return waypoints, chosen_angle
+
+    # ----- helpers ----------------------------------------------------
+
+    def _angle_to_sector(self, angles: np.ndarray) -> np.ndarray:
+        """Map angles (rad) to sector indices [0, num_sectors)."""
+        a = np.mod(angles, 2.0 * math.pi)
+        return (a / self._sector_width).astype(int) % self.num_sectors
+
+    def _sector_to_angle(self, sector: int) -> float:
+        """Return the centre angle (rad) of a sector."""
+        return (sector + 0.5) * self._sector_width
+
+    @staticmethod
+    def _angle_diff(a: float, b: float) -> float:
+        """Signed shortest angular difference a − b, result in (−pi, pi]."""
+        d = (a - b) % (2.0 * math.pi)
+        if d > math.pi:
+            d -= 2.0 * math.pi
+        return d
