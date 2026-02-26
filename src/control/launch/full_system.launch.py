@@ -34,6 +34,12 @@ def generate_launch_description():
             'publish_frequency': 1.0,
             'add_dynamic_obstacles': False,
         }],
+        # Mock publishes on /perception/occupancy and /mavlink/local_position/pose
+        # (same topics as real perception + control)
+        remappings=[
+            ('/occupancy_grid', '/perception/occupancy'),
+            ('/current_pose', '/mavlink/local_position/pose'),
+        ],
         emulate_tty=True,
     )
     
@@ -47,7 +53,7 @@ def generate_launch_description():
         emulate_tty=True,
     )
     
-    # Control node (MAVROS interface)
+    # Control node (PyMAVLink interface)
     control_node = Node(
         package='control',
         executable='control_node',

@@ -15,6 +15,10 @@ planning_node:
     goal_x: 8.0
     goal_y: 8.0
 
+    # Topic names (configurable for real vs mock perception)
+    occupancy_topic: "/perception/occupancy"
+    pose_topic: "/mavlink/local_position/pose"
+
 mock_perception_node:
   ros__parameters:
     # Occupancy grid parameters

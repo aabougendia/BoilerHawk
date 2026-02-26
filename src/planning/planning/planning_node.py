@@ -8,7 +8,7 @@ import rclpy
 from rclpy.node import Node
 from nav_msgs.msg import OccupancyGrid, Path
 from geometry_msgs.msg import PoseStamped
-from std_msgs.msg import Header
+from std_msgs.msg import Header, String
 from visualization_msgs.msg import Marker, MarkerArray
 import numpy as np
 
@@ -31,6 +31,9 @@ class PlanningNode(Node):
         self.declare_parameter('start_y', 0.0)
         self.declare_parameter('goal_x', 5.0)
         self.declare_parameter('goal_y', 5.0)
+        self.declare_parameter('occupancy_topic', '/perception/occupancy')
+        self.declare_parameter('pose_topic', '/mavlink/local_position/pose')
+        self.declare_parameter('safety_radius', 1.0)  # meters
         
         # Get parameters
         occupancy_threshold = self.get_parameter('occupancy_threshold').value
@@ -40,6 +43,9 @@ class PlanningNode(Node):
         self.start_y = self.get_parameter('start_y').value
         self.goal_x = self.get_parameter('goal_x').value
         self.goal_y = self.get_parameter('goal_y').value
+        occupancy_topic = self.get_parameter('occupancy_topic').value
+        pose_topic = self.get_parameter('pose_topic').value
+        self.safety_radius = self.get_parameter('safety_radius').value
         
         # Initialize path planner
         self.path_planner = PathPlanner(occupancy_threshold=occupancy_threshold)
@@ -52,17 +58,20 @@ class PlanningNode(Node):
         # Subscribers
         self.occupancy_sub = self.create_subscription(
             OccupancyGrid,
-            '/occupancy_grid',
+            occupancy_topic,
             self.occupancy_callback,
             10
         )
         
         self.pose_sub = self.create_subscription(
             PoseStamped,
-            '/current_pose',
+            pose_topic,
             self.pose_callback,
             10
         )
+        
+        self.get_logger().info(f'Subscribing to occupancy: {occupancy_topic}')
+        self.get_logger().info(f'Subscribing to pose: {pose_topic}')
         
         # Publishers
         self.global_path_pub = self.create_publisher(
@@ -83,11 +92,24 @@ class PlanningNode(Node):
             10
         )
         
+        self.danger_pub = self.create_publisher(
+            String,
+            '/planning/danger',
+            10
+        )
+        
+        self.status_pub = self.create_publisher(
+            String,
+            '/planning/status',
+            10
+        )
+        
         # Timer for periodic path updates
         self.create_timer(1.0 / planning_frequency, self.planning_callback)
         
         self.get_logger().info('Planning node initialized')
         self.get_logger().info(f'Start: ({self.start_x}, {self.start_y}), Goal: ({self.goal_x}, {self.goal_y})')
+        self.get_logger().info(f'Safety radius: {self.safety_radius}m')
     
     def occupancy_callback(self, msg: OccupancyGrid):
         """
@@ -116,9 +138,19 @@ class PlanningNode(Node):
         self.occupancy_grid_received = True
         self.get_logger().info(f'Occupancy grid received: {width}x{height}, resolution: {resolution}')
         
+        # --- Danger detection: check if obstacle is close to drone ---
+        self._check_danger(grid_data, resolution, (origin_x, origin_y))
+        
         # Trigger global path planning if not done yet
         if not self.global_path_computed:
             self.compute_global_path()
+        else:
+            # Check if existing global path is blocked by new obstacles
+            if self.path_planner.is_path_blocked(self.path_planner.global_path):
+                self.get_logger().warn('Global path blocked! Replanning...')
+                self._publish_status('REPLANNING')
+                self.global_path_computed = False
+                self.compute_global_path()
     
     def pose_callback(self, msg: PoseStamped):
         """
@@ -268,6 +300,60 @@ class PlanningNode(Node):
             marker_array.markers.append(local_marker)
         
         self.path_markers_pub.publish(marker_array)
+
+    # =================================================================
+    #  Danger detection & status
+    # =================================================================
+
+    def _check_danger(self, grid_data: np.ndarray, resolution: float,
+                      origin: tuple):
+        """
+        Check if any occupied cell is dangerously close to the drone.
+        Publishes EMERGENCY_HOLD or CLEAR on /planning/danger.
+        """
+        if self.current_position is None:
+            return
+
+        # Get drone position in world coordinates
+        drone_world = self.path_planner.grid_to_world(self.current_position)
+
+        # Find all occupied cells
+        occupied = np.argwhere(grid_data >= self.path_planner.occupancy_threshold)
+
+        if len(occupied) == 0:
+            self._publish_danger('CLEAR')
+            return
+
+        # Convert occupied cells to world coordinates and check distance
+        min_dist = float('inf')
+        for cell in occupied:
+            row, col = int(cell[0]), int(cell[1])
+            cell_world = self.path_planner.grid_to_world((row, col))
+            dx = drone_world[0] - cell_world[0]
+            dy = drone_world[1] - cell_world[1]
+            dist = np.sqrt(dx*dx + dy*dy)
+            if dist < min_dist:
+                min_dist = dist
+
+        if min_dist < self.safety_radius:
+            self.get_logger().warn(
+                f'DANGER: Obstacle {min_dist:.2f}m away '
+                f'(threshold: {self.safety_radius}m)')
+            self._publish_danger('EMERGENCY_HOLD')
+        else:
+            self._publish_danger('CLEAR')
+
+    def _publish_danger(self, level: str):
+        """Publish danger level on /planning/danger."""
+        msg = String()
+        msg.data = level
+        self.danger_pub.publish(msg)
+
+    def _publish_status(self, status: str):
+        """Publish planning status on /planning/status."""
+        msg = String()
+        msg.data = status
+        self.status_pub.publish(msg)
 
 
 def main(args=None):

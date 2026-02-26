@@ -37,7 +37,7 @@ class MockPerceptionNode(Node):
         # Publishers
         self.occupancy_pub = self.create_publisher(
             OccupancyGrid,
-            '/occupancy_grid',
+            '/perception/occupancy',
             10
         )
         

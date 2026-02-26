@@ -287,6 +287,23 @@ class PathPlanner:
         
         self.local_path = local_segment
         return self.local_path
+
+    def is_path_blocked(self, path: List[Tuple[int, int]]) -> bool:
+        """
+        Check if any cell in the given path is now occupied.
+
+        Args:
+            path: List of (row, col) positions
+
+        Returns:
+            True if any cell is blocked (occupied or out of bounds)
+        """
+        if not path:
+            return False
+        for pos in path:
+            if not self.is_valid_cell(pos):
+                return True
+        return False
     
     def grid_to_world(self, grid_pos: Tuple[int, int]) -> Tuple[float, float]:
         """

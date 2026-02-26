@@ -5,6 +5,7 @@ import numpy as np
 from sensor_msgs.msg import PointCloud2
 import sensor_msgs_py.point_cloud2 as pc2
 from nav_msgs.msg import OccupancyGrid
+from geometry_msgs.msg import PoseStamped
 from std_msgs.msg import Header
 
 class PerceptionNode(Node):
@@ -14,12 +15,14 @@ class PerceptionNode(Node):
         # --- Parameters ---
         self.declare_parameter('pointcloud_topic', '/camera/depth/color/points')
         self.declare_parameter('occupancy_topic', '/perception/occupancy')
+        self.declare_parameter('pose_topic', '/mavlink/local_position/pose')
         self.declare_parameter('resolution', 0.1)
         self.declare_parameter('max_range', 5.0)
         self.declare_parameter('grid_frame', 'map')
 
         self.pointcloud_topic = str(self.get_parameter('pointcloud_topic').value)
         self.occupancy_topic = str(self.get_parameter('occupancy_topic').value)
+        self.pose_topic = str(self.get_parameter('pose_topic').value)
         self.resolution = float(self.get_parameter('resolution').value)
         self.max_range = float(self.get_parameter('max_range').value)
         self.grid_frame = str(self.get_parameter('grid_frame').value)
@@ -39,13 +42,30 @@ class PerceptionNode(Node):
             10
         )
 
+        # Subscribe to drone pose for grid origin
+        self.pose_sub = self.create_subscription(
+            PoseStamped,
+            self.pose_topic,
+            self.pose_callback,
+            10
+        )
+
         # --- Publishers ---
         self.map_pub = self.create_publisher(OccupancyGrid, self.occupancy_topic, 10)
 
         self._last_grid_log_time = None
+        self.drone_position = (0.0, 0.0, 0.0)  # (x, y, z) in world frame
 
         self.get_logger().info(
             f"🧠 Perception node running. Listening on {self.pointcloud_topic} and publishing {self.occupancy_topic}"
+        )
+
+    def pose_callback(self, msg: PoseStamped):
+        """Update drone position for grid origin."""
+        self.drone_position = (
+            msg.pose.position.x,
+            msg.pose.position.y,
+            msg.pose.position.z,
         )
 
     def pointcloud_callback(self, msg):
@@ -61,10 +81,9 @@ class PerceptionNode(Node):
         if len(points) == 0:
             return
 
-        # Shift coordinates to make the map centered around drone
-        # (assuming drone is at origin)
-        origin = np.array([0.0, 0.0, 0.0])
-        points = points - origin
+        # Points are in sensor frame relative to drone
+        # Grid is centered on drone's world position
+        drone_x, drone_y, _ = self.drone_position
 
         # Create 2D occupancy projection (top-down)
         # Drop Z coordinate and map X,Y to grid cells
@@ -91,8 +110,8 @@ class PerceptionNode(Node):
         msg_out.info.resolution = self.resolution
         msg_out.info.width = grid_size
         msg_out.info.height = grid_size
-        msg_out.info.origin.position.x = -self.max_range
-        msg_out.info.origin.position.y = -self.max_range
+        msg_out.info.origin.position.x = drone_x - self.max_range
+        msg_out.info.origin.position.y = drone_y - self.max_range
         msg_out.info.origin.position.z = 0.0
         msg_out.info.origin.orientation.w = 1.0
 
