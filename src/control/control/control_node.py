@@ -193,8 +193,8 @@ class ControlNode(Node):
             else:
                 self.get_logger().warn('Disconnected from flight controller')
         
-        # Request takeoff when armed and in GUIDED mode
-        if msg.armed and msg.mode == 'GUIDED' and not self.takeoff_requested:
+        # Request takeoff when armed and in GUIDED mode (only if auto_arm is on)
+        if self.auto_arm and msg.armed and msg.mode == 'GUIDED' and not self.takeoff_requested:
             self.get_logger().info('Armed in GUIDED mode - requesting takeoff')
             if self.request_takeoff():
                 self.takeoff_requested = True

@@ -193,6 +193,7 @@ class TestPathPlanner(unittest.TestCase):
     def test_world_to_grid_conversion(self):
         """Test world to grid coordinate conversion."""
         self.planner.grid_height = 100
+        self.planner.grid_width = 100
         self.planner.grid_resolution = 0.1
         self.planner.grid_origin = (0.0, 0.0)
         
@@ -206,6 +207,7 @@ class TestPathPlanner(unittest.TestCase):
     def test_grid_to_world_conversion(self):
         """Test grid to world coordinate conversion."""
         self.planner.grid_height = 100
+        self.planner.grid_width = 100
         self.planner.grid_resolution = 0.1
         self.planner.grid_origin = (0.0, 0.0)
         
@@ -221,6 +223,7 @@ class TestPathPlanner(unittest.TestCase):
     def test_round_trip_conversion(self):
         """Test round-trip coordinate conversion."""
         self.planner.grid_height = 100
+        self.planner.grid_width = 100
         self.planner.grid_resolution = 0.1
         self.planner.grid_origin = (0.0, 0.0)
         
