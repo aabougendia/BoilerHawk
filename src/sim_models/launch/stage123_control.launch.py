@@ -96,7 +96,7 @@ def generate_launch_description():
                     '--console',
                     '--out', 'udp:127.0.0.1:14550',
                 ],
-                output='screen',
+                output='log',
                 shell=False,
             ),
         ],
@@ -112,7 +112,7 @@ def generate_launch_description():
                 package='mavros',
                 executable='mavros_node',
                 namespace='mavros',
-                output='screen',
+                output='log',
                 parameters=[
                     mavros_pluginlists,
                     mavros_config,
@@ -200,8 +200,11 @@ def generate_launch_description():
             Node(
                 package='rviz2',
                 executable='rviz2',
-                arguments=['-d', rviz_config_path],
-                output='screen',
+                arguments=[
+                    '-d', rviz_config_path,
+                    '--ros-args', '--log-level', 'error',
+                ],
+                output='log',
             )
         ],
     )
@@ -216,7 +219,7 @@ def generate_launch_description():
             {'pointcloud_topic': '/depth_camera/points'},
             {'occupancy_topic': '/occupancy_grid'},
             {'pose_topic': '/mavros/local_position/pose'},
-            {'resolution': 0.1},
+            {'resolution': 0.2},
             {'max_range': 5.0},
             {'grid_frame': 'map'},
         ],

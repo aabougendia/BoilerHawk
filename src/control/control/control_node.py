@@ -58,6 +58,8 @@ class ControlNode(Node):
         self.diag_path_received_count = 0
         self.diag_setpoint_published_count = 0
         self.diag_last_path_time = None
+        self._last_path_fingerprint = None  # (count, first_xy, last_xy)
+        self._path_complete_logged = False
         
         # QoS profile for MAVROS compatibility
         qos_profile = QoSProfile(
@@ -126,8 +128,8 @@ class ControlNode(Node):
         # Timer for status monitoring
         self.status_timer = self.create_timer(1.0, self.status_callback)
         
-        # Timer for detailed diagnostics (every 5 seconds)
-        self.diag_timer = self.create_timer(5.0, self.diagnostics_callback)
+        # Timer for detailed diagnostics (every 30 seconds)
+        self.diag_timer = self.create_timer(30.0, self.diagnostics_callback)
         
         self.get_logger().info('Control node initialized')
         self.get_logger().info(f'Waypoint threshold: {self.waypoint_threshold}m')
@@ -164,15 +166,50 @@ class ControlNode(Node):
             self.get_logger().warn('Received empty path')
             return
         
+        # Build a fingerprint to detect genuinely new paths
+        first = msg.poses[0].pose.position
+        last = msg.poses[-1].pose.position
+        fp = (len(msg.poses),
+              round(first.x, 2), round(first.y, 2),
+              round(last.x, 2), round(last.y, 2))
+        path_changed = (fp != self._last_path_fingerprint)
+        self._last_path_fingerprint = fp
+        
         self.current_path = msg
-        self.current_waypoint_idx = 0
         self.diag_path_received_count += 1
         self.diag_last_path_time = self.get_clock().now()
         
-        self.get_logger().info(f'Received new path with {len(msg.poses)} waypoints')
+        # Find the closest waypoint, then skip forward past all waypoints
+        # that are already within the reached threshold so the drone never
+        # targets an already-passed waypoint.
+        best_idx = 0
+        if self.current_pose is not None:
+            cx = self.current_pose.pose.position.x
+            cy = self.current_pose.pose.position.y
+            # 1. Find closest waypoint by 2-D distance
+            min_dist = float('inf')
+            for i, pose_st in enumerate(msg.poses):
+                wp = pose_st.pose.position
+                d = math.sqrt((wp.x - cx)**2 + (wp.y - cy)**2)
+                if d < min_dist:
+                    min_dist = d
+                    best_idx = i
+            # 2. Advance past waypoints already within the reached threshold
+            while best_idx < len(msg.poses) - 1:
+                wp = msg.poses[best_idx].pose.position
+                d = math.sqrt((wp.x - cx)**2 + (wp.y - cy)**2)
+                if d < self.waypoint_threshold:
+                    best_idx += 1
+                else:
+                    break
+        self.current_waypoint_idx = best_idx
+        
+        if path_changed:
+            self._path_complete_logged = False
+            self.get_logger().info(f'Received new path with {len(msg.poses)} waypoints')
         
         # Update target setpoint to first waypoint
-        self.update_target_waypoint()
+        self.update_target_waypoint(log=path_changed)
     
     def state_callback(self, msg: State):
         """
@@ -237,13 +274,15 @@ class ControlNode(Node):
                 self.target_setpoint.pose.position
             )
             
-            # Debug logging
-            if self.current_waypoint_idx == 0 or distance < 1.0:
+            # Debug logging (throttled to 5 s)
+            now_ns = self.get_clock().now().nanoseconds
+            if not hasattr(self, '_last_dist_log') or (now_ns - self._last_dist_log) > 5_000_000_000:
                 self.get_logger().info(
                     f'Dist: {distance:.2f}m | '
                     f'Pos: ({self.current_pose.pose.position.x:.2f}, {self.current_pose.pose.position.y:.2f}) | '
                     f'Tgt: ({self.target_setpoint.pose.position.x:.2f}, {self.target_setpoint.pose.position.y:.2f})'
                 )
+                self._last_dist_log = now_ns
             
             if distance < self.waypoint_threshold:
                 self.advance_waypoint()
@@ -419,7 +458,7 @@ class ControlNode(Node):
         
         self.get_logger().info('=' * 60)
     
-    def update_target_waypoint(self):
+    def update_target_waypoint(self, log=True):
         """
         Update the target setpoint to the current waypoint in the path.
         """
@@ -438,12 +477,13 @@ class ControlNode(Node):
         self.target_setpoint.pose.position.z = self.target_altitude  # Use configured altitude
         self.target_setpoint.pose.orientation = waypoint.pose.orientation
         
-        self.get_logger().info(
-            f'Target waypoint {self.current_waypoint_idx + 1}: '
-            f'({self.target_setpoint.pose.position.x:.2f}, '
-            f'{self.target_setpoint.pose.position.y:.2f}, '
-            f'{self.target_setpoint.pose.position.z:.2f})'
-        )
+        if log:
+            self.get_logger().info(
+                f'Target waypoint {self.current_waypoint_idx + 1}: '
+                f'({self.target_setpoint.pose.position.x:.2f}, '
+                f'{self.target_setpoint.pose.position.y:.2f}, '
+                f'{self.target_setpoint.pose.position.z:.2f})'
+            )
     
     def advance_waypoint(self):
         """
@@ -455,12 +495,14 @@ class ControlNode(Node):
         self.current_waypoint_idx += 1
         
         if self.current_waypoint_idx >= len(self.current_path.poses):
-            self.get_logger().info('Path complete! Reached final waypoint.')
+            if not self._path_complete_logged:
+                self.get_logger().info('Path complete! Reached final waypoint.')
+                self._path_complete_logged = True
             # Hold at final position
             return
         
         self.get_logger().info(f'Waypoint reached! Advancing to waypoint {self.current_waypoint_idx + 1}')
-        self.update_target_waypoint()
+        self.update_target_waypoint(log=True)
     
     def calculate_distance(self, point1: Point, point2: Point) -> float:
         """

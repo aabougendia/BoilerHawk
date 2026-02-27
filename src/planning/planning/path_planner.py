@@ -320,8 +320,8 @@ class PathPlanner:
             (row, col) in grid, clamped to valid bounds
         """
         x, y = world_pos
-        col = int((x - self.grid_origin[0]) / self.grid_resolution)
-        row = int((y - self.grid_origin[1]) / self.grid_resolution)
+        col = round((x - self.grid_origin[0]) / self.grid_resolution)
+        row = round((y - self.grid_origin[1]) / self.grid_resolution)
         # Clamp to valid grid bounds
         row = max(0, min(row, self.grid_height - 1))
         col = max(0, min(col, self.grid_width - 1))

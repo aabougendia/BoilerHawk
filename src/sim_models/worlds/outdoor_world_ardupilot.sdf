@@ -45,7 +45,7 @@
 
     <!-- Lighting: Realistic sun -->
     <light type="directional" name="sun">
-      <cast_shadows>true</cast_shadows>
+      <cast_shadows>false</cast_shadows>
       <pose>0 0 10 0 0 0</pose>
       <diffuse>0.8 0.8 0.8 1</diffuse>
       <specular>0.5 0.5 0.5 1</specular>
@@ -62,7 +62,7 @@
     <scene>
       <ambient>0.4 0.4 0.4 1</ambient>
       <background>0.7 0.7 1.0 1</background>
-      <shadows>true</shadows>
+      <shadows>false</shadows>
       <grid>false</grid>
     </scene>
 
@@ -176,6 +176,60 @@
             <sphere>
               <radius>0.8</radius>
             </sphere>
+          </geometry>
+        </collision>
+      </link>
+    </model>
+
+    <!-- ===== Obstacles blocking the (0,0)→(3,3) diagonal path ===== -->
+
+    <!-- Obstacle 1: wall at (1.5, 1.5) — blocks midpoint of path -->
+    <model name="obstacle_wall_1">
+      <static>true</static>
+      <pose>1.5 1.5 1.5 0 0 0</pose>
+      <link name="wall_link">
+        <visual name="wall_visual">
+          <geometry>
+            <box>
+              <size>1.0 1.0 3.0</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.8 0.2 0.2 1</ambient>
+            <diffuse>0.9 0.2 0.2 1</diffuse>
+          </material>
+        </visual>
+        <collision name="wall_collision">
+          <geometry>
+            <box>
+              <size>1.0 1.0 3.0</size>
+            </box>
+          </geometry>
+        </collision>
+      </link>
+    </model>
+
+    <!-- Obstacle 2: wall at (2.0, 2.5) — blocks upper diagonal -->
+    <model name="obstacle_wall_2">
+      <static>true</static>
+      <pose>2.0 2.5 1.5 0 0 0</pose>
+      <link name="wall_link">
+        <visual name="wall_visual">
+          <geometry>
+            <box>
+              <size>0.8 0.8 3.0</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.2 0.2 0.8 1</ambient>
+            <diffuse>0.2 0.2 0.9 1</diffuse>
+          </material>
+        </visual>
+        <collision name="wall_collision">
+          <geometry>
+            <box>
+              <size>0.8 0.8 3.0</size>
+            </box>
           </geometry>
         </collision>
       </link>

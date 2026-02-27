@@ -154,11 +154,15 @@ class PerceptionNode(Node):
         self.map_pub.publish(msg_out)
 
         now = self.get_clock().now()
+        occupied_count = int(np.count_nonzero(grid == 100))
         if (
             self._last_grid_log_time is None
-            or (now - self._last_grid_log_time).nanoseconds >= 5_000_000_000
+            or (now - self._last_grid_log_time).nanoseconds >= 30_000_000_000
         ):
-            self.get_logger().info(f"Published occupancy grid ({grid_size}x{grid_size})")
+            self.get_logger().info(
+                f"Published occupancy grid ({grid_size}x{grid_size}), "
+                f"occupied cells: {occupied_count}"
+            )
             self._last_grid_log_time = now
 
 def main(args=None):
