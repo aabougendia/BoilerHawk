@@ -4,6 +4,9 @@ Control Node for BoilerHawk.
 Receives paths from planning module and sends setpoint commands to ArduPilot via MAVROS.
 """
 
+import logging
+import math
+import os
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
@@ -12,7 +15,21 @@ from geometry_msgs.msg import PoseStamped, Point
 from std_msgs.msg import String
 from mavros_msgs.msg import State, OverrideRCIn
 from mavros_msgs.srv import CommandBool, SetMode
-import math
+
+
+def _setup_file_logger(node_name: str) -> logging.Logger:
+    log_dir = os.path.expanduser('~/BoilerHawk/BoilerHawk/logs')
+    os.makedirs(log_dir, exist_ok=True)
+    flog = logging.getLogger(f'bhawk.{node_name}')
+    flog.setLevel(logging.DEBUG)
+    if not flog.handlers:
+        fh = logging.FileHandler(
+            os.path.join(log_dir, f'{node_name}.log'), mode='w')
+        fh.setFormatter(logging.Formatter(
+            '%(asctime)s [%(levelname)s] %(message)s',
+            datefmt='%H:%M:%S'))
+        flog.addHandler(fh)
+    return flog
 
 
 class ControlNode(Node):
@@ -42,6 +59,10 @@ class ControlNode(Node):
         
         # Failsafe override tracking
         self.failsafe_disabled = False
+        
+        # Arming readiness: wait for GPS/EKF convergence
+        self._mavros_connect_time = None  # wallclock when MAVROS first connected
+        self._arm_delay_sec = 60.0       # seconds to wait after connect
         
         # Takeoff state tracking
         self.takeoff_complete = False
@@ -131,6 +152,14 @@ class ControlNode(Node):
         # Timer for detailed diagnostics (every 30 seconds)
         self.diag_timer = self.create_timer(30.0, self.diagnostics_callback)
         
+        # File logger
+        self.flog = _setup_file_logger('control')
+        self.flog.info('=== Control node started ===')
+        self.flog.info(f'waypoint_threshold={self.waypoint_threshold}, '
+                       f'setpoint_rate={setpoint_rate}, '
+                       f'auto_arm={self.auto_arm}, '
+                       f'target_alt={self.target_altitude}')
+        
         self.get_logger().info('Control node initialized')
         self.get_logger().info(f'Waypoint threshold: {self.waypoint_threshold}m')
         self.get_logger().info(f'Setpoint rate: {setpoint_rate}Hz')
@@ -207,6 +236,11 @@ class ControlNode(Node):
         if path_changed:
             self._path_complete_logged = False
             self.get_logger().info(f'Received new path with {len(msg.poses)} waypoints')
+            self.flog.info(
+                f'New path: {len(msg.poses)} wps, '
+                f'start=({first.x:.1f},{first.y:.1f}), '
+                f'end=({last.x:.1f},{last.y:.1f}), '
+                f'idx={best_idx}')
         
         # Update target setpoint to first waypoint
         self.update_target_waypoint(log=path_changed)
@@ -225,10 +259,28 @@ class ControlNode(Node):
         if prev_state is None or prev_state.connected != msg.connected:
             if msg.connected:
                 self.get_logger().info('Connected to flight controller')
+                self.flog.info('MAVROS connected')
+                if self._mavros_connect_time is None:
+                    import time as _time
+                    self._mavros_connect_time = _time.monotonic()
+                    self.get_logger().info(
+                        f'Will wait {self._arm_delay_sec:.0f}s for GPS/EKF before arming')
+                    self.flog.info(
+                        f'Arming delay: {self._arm_delay_sec:.0f}s from now')
                 # Disable throttle failsafe when connected (for SITL)
                 self.disable_throttle_failsafe()
             else:
                 self.get_logger().warn('Disconnected from flight controller')
+                self.flog.warning('MAVROS disconnected')
+        
+        # Detect disarm → reset takeoff state so we re-takeoff on next arm
+        if prev_state is not None and prev_state.armed and not msg.armed:
+            if self.takeoff_requested:
+                self.get_logger().warn(
+                    'Drone disarmed — resetting takeoff state for re-takeoff')
+                self.flog.warning('Disarm detected, resetting takeoff state')
+                self.takeoff_requested = False
+                self.takeoff_complete = False
         
         # Request takeoff when armed and in GUIDED mode (only if auto_arm is on)
         if self.auto_arm and msg.armed and msg.mode == 'GUIDED' and not self.takeoff_requested:
@@ -240,9 +292,23 @@ class ControlNode(Node):
         if prev_state is None or prev_state.mode != msg.mode:
             self.get_logger().info(f'Flight mode: {msg.mode}')
         
-        # Handle auto mode switching
+        # Handle auto mode switching (always, even during delay)
         if self.auto_mode_switch and msg.connected and msg.mode != 'GUIDED':
             self.request_guided_mode()
+        
+        # Don't attempt arming until GPS/EKF have had time to converge
+        import time as _time
+        if self._mavros_connect_time is not None:
+            elapsed = _time.monotonic() - self._mavros_connect_time
+            if elapsed < self._arm_delay_sec:
+                # Throttled log (every 10s)
+                if not hasattr(self, '_last_delay_log') or \
+                   _time.monotonic() - self._last_delay_log > 10:
+                    remaining = self._arm_delay_sec - elapsed
+                    self.get_logger().info(
+                        f'Waiting for GPS/EKF: {remaining:.0f}s remaining')
+                    self._last_delay_log = _time.monotonic()
+                return
         
         # Handle auto arming
         if self.auto_arm and msg.connected and not msg.armed and msg.mode == 'GUIDED':
@@ -265,6 +331,7 @@ class ControlNode(Node):
            self.mavros_state.mode == 'GUIDED' and \
            msg.pose.position.z >= (self.target_altitude * 0.9):
             self.get_logger().info(f'Altitude {msg.pose.position.z:.2f}m reached - marking takeoff complete')
+            self.flog.info(f'Takeoff complete at z={msg.pose.position.z:.2f}m')
             self.takeoff_complete = True
             
         # Check if current waypoint is reached
@@ -296,9 +363,9 @@ class ControlNode(Node):
         if self.sitl_mode and self.mavros_state is not None and self.mavros_state.connected:
             self.disable_throttle_failsafe()
         
-        # Wait for takeoff to complete before sending setpoints
+        # Wait for takeoff to complete before sending path setpoints
         if not self.takeoff_complete:
-            # Log why we're not publishing (throttle to 1Hz)
+            # Log why we're not following path yet (throttle to 1Hz)
             now = self.get_clock().now().nanoseconds
             if not hasattr(self, '_last_wait_log') or (now - self._last_wait_log) > 1e9:
                 self.get_logger().warn(
@@ -306,6 +373,19 @@ class ControlNode(Node):
                     f'takeoff_requested={self.takeoff_requested}'
                 )
                 self._last_wait_log = now
+            # CRITICAL: Publish a "hover at takeoff altitude" setpoint during
+            # takeoff climb.  ArduPilot GUIDED mode requires continuous
+            # setpoints or it will disarm the vehicle.
+            if self.takeoff_requested and self.current_pose is not None:
+                hover = PoseStamped()
+                hover.header.stamp = self.get_clock().now().to_msg()
+                hover.header.frame_id = 'map'
+                hover.pose.position.x = self.current_pose.pose.position.x
+                hover.pose.position.y = self.current_pose.pose.position.y
+                hover.pose.position.z = self.target_altitude
+                hover.pose.orientation.w = 1.0
+                self.setpoint_pub.publish(hover)
+                self.diag_setpoint_published_count += 1
             return
 
         if self.target_setpoint is None:
@@ -620,12 +700,18 @@ class ControlNode(Node):
             if response.success:
                 self.get_logger().info('Takeoff command accepted')
                 # Give it time to climb before declaring complete
-                self.takeoff_timer = self.create_timer(3.0, self.mark_takeoff_complete, one_shot=True)
+                self.takeoff_timer = self.create_timer(3.0, self._one_shot_takeoff_complete)
             else:
                 self.get_logger().warn('Takeoff command failed')
         except Exception as e:
             self.get_logger().error(f'Takeoff service call failed: {e}')
     
+    def _one_shot_takeoff_complete(self):
+        """Fire once, then cancel the timer."""
+        self.mark_takeoff_complete()
+        if self.takeoff_timer is not None:
+            self.takeoff_timer.cancel()
+
     def mark_takeoff_complete(self):
         """Mark takeoff as complete after delay."""
         self.takeoff_complete = True

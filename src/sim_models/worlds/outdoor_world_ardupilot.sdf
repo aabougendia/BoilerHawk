@@ -43,156 +43,53 @@
       <surface_model>EARTH_WGS84</surface_model>
     </spherical_coordinates>
 
-    <!-- Lighting: Realistic sun -->
+    <!-- Minimal directional light (no shadows) -->
     <light type="directional" name="sun">
       <cast_shadows>false</cast_shadows>
       <pose>0 0 10 0 0 0</pose>
       <diffuse>0.8 0.8 0.8 1</diffuse>
-      <specular>0.5 0.5 0.5 1</specular>
-      <attenuation>
-        <range>1000</range>
-        <constant>0.9</constant>
-        <linear>0.01</linear>
-        <quadratic>0.001</quadratic>
-      </attenuation>
+      <specular>0.2 0.2 0.2 1</specular>
       <direction>-0.5 0.1 -0.9</direction>
     </light>
 
-    <!-- Sky -->
     <scene>
-      <ambient>0.4 0.4 0.4 1</ambient>
-      <background>0.7 0.7 1.0 1</background>
+      <ambient>0.6 0.6 0.6 1</ambient>
+      <background>0.66 0.78 0.9 1</background>
       <shadows>false</shadows>
-      <grid>false</grid>
+      <grid>true</grid>
     </scene>
 
-    <!-- Textured ground plane (large outdoor area) -->
-    <include>
-      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Ground Plane</uri>
-      <pose>0 0 0 0 0 0</pose>
-    </include>
-
-    <!-- Outdoor structures -->
-    <model name="simple_building">
+    <!-- Minimal ground plane (inline, no Fuel download) -->
+    <model name="ground_plane">
       <static>true</static>
-      <pose>15 10 0 0 0 0</pose>
-      <link name="building_link">
-        <visual name="building_visual">
-          <geometry>
-            <box>
-              <size>8 6 4</size>
-            </box>
-          </geometry>
+      <link name="link">
+        <collision name="collision">
+          <geometry><plane><normal>0 0 1</normal><size>100 100</size></plane></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><plane><normal>0 0 1</normal><size>100 100</size></plane></geometry>
           <material>
-            <ambient>0.7 0.5 0.4 1</ambient>
-            <diffuse>0.7 0.5 0.4 1</diffuse>
+            <ambient>0.5 0.55 0.5 1</ambient>
+            <diffuse>0.5 0.55 0.5 1</diffuse>
           </material>
         </visual>
-        <collision name="building_collision">
-          <geometry>
-            <box>
-              <size>8 6 4</size>
-            </box>
-          </geometry>
-        </collision>
       </link>
     </model>
 
-    <!-- Natural elements: Trees -->
-    <include>
-      <name>pine_tree_1</name>
-      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Pine Tree</uri>
-      <pose>10 -5 0 0 0 0</pose>
-    </include>
+    <!-- ===== Maze corridor: 3 walls forcing zigzag from (0,0) to (3,15) ===== -->
+    <!--
+         Path: north → right gap → north → left gap → north → right gap → goal
+         Each wall is 6m long × 0.5m thick × 3m tall with a ~3.5m gap.
+    -->
 
-    <include>
-      <name>pine_tree_2</name>
-      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Pine Tree</uri>
-      <pose>-8 8 0 0 0 0</pose>
-    </include>
-
-    <include>
-      <name>pine_tree_3</name>
-      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Pine Tree</uri>
-      <pose>-10 -10 0 0 0 0</pose>
-    </include>
-
-    <!-- Outdoor obstacles -->
-    <include>
-      <name>cone_1</name>
-      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Construction Cone</uri>
-      <pose>5 5 0 0 0 0</pose>
-    </include>
-
-    <include>
-      <name>barrel</name>
-      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Construction Barrel</uri>
-      <pose>6 7 0 0 0 0</pose>
-    </include>
-
-    <!-- Rocks -->
-    <model name="rock_1">
+    <!-- Wall 1 (red): y=4, spans x=[-5, 1], gap on RIGHT x=[1.5, 5] -->
+    <model name="maze_wall_1">
       <static>true</static>
-      <pose>-5 5 0 0 0 0</pose>
-      <link name="rock_link">
-        <visual name="rock_visual">
-          <geometry>
-            <sphere>
-              <radius>1.2</radius>
-            </sphere>
-          </geometry>
-          <material>
-            <ambient>0.5 0.5 0.5 1</ambient>
-            <diffuse>0.6 0.6 0.6 1</diffuse>
-          </material>
-        </visual>
-        <collision name="rock_collision">
-          <geometry>
-            <sphere>
-              <radius>1.2</radius>
-            </sphere>
-          </geometry>
-        </collision>
-      </link>
-    </model>
-
-    <model name="rock_2">
-      <static>true</static>
-      <pose>8 -8 0 0 0 0.5</pose>
-      <link name="rock_link">
-        <visual name="rock_visual">
-          <geometry>
-            <sphere>
-              <radius>0.8</radius>
-            </sphere>
-          </geometry>
-          <material>
-            <ambient>0.4 0.4 0.4 1</ambient>
-            <diffuse>0.5 0.5 0.5 1</diffuse>
-          </material>
-        </visual>
-        <collision name="rock_collision">
-          <geometry>
-            <sphere>
-              <radius>0.8</radius>
-            </sphere>
-          </geometry>
-        </collision>
-      </link>
-    </model>
-
-    <!-- ===== Obstacles blocking the (0,0)→(10,10) diagonal path ===== -->
-
-    <!-- Obstacle 1: red wall at (4, 4) -->
-    <model name="obstacle_wall_1">
-      <static>true</static>
-      <pose>4 4 1.5 0 0 0</pose>
+      <pose>-2.0 4 1.5 0 0 0</pose>
       <link name="wall_link">
         <visual name="wall_visual">
           <geometry>
-            <box>
-              <size>1.0 1.0 3.0</size>
-            </box>
+            <box><size>6.0 0.5 3.0</size></box>
           </geometry>
           <material>
             <ambient>0.8 0.2 0.2 1</ambient>
@@ -201,24 +98,20 @@
         </visual>
         <collision name="wall_collision">
           <geometry>
-            <box>
-              <size>1.0 1.0 3.0</size>
-            </box>
+            <box><size>6.0 0.5 3.0</size></box>
           </geometry>
         </collision>
       </link>
     </model>
 
-    <!-- Obstacle 2: blue wall at (7, 7) -->
-    <model name="obstacle_wall_2">
+    <!-- Wall 2 (blue): y=8, spans x=[-1, 5], gap on LEFT x=[-5, -1.5] -->
+    <model name="maze_wall_2">
       <static>true</static>
-      <pose>7 7 1.5 0 0 0</pose>
+      <pose>2.0 8 1.5 0 0 0</pose>
       <link name="wall_link">
         <visual name="wall_visual">
           <geometry>
-            <box>
-              <size>0.8 0.8 3.0</size>
-            </box>
+            <box><size>6.0 0.5 3.0</size></box>
           </geometry>
           <material>
             <ambient>0.2 0.2 0.8 1</ambient>
@@ -227,9 +120,29 @@
         </visual>
         <collision name="wall_collision">
           <geometry>
-            <box>
-              <size>0.8 0.8 3.0</size>
-            </box>
+            <box><size>6.0 0.5 3.0</size></box>
+          </geometry>
+        </collision>
+      </link>
+    </model>
+
+    <!-- Wall 3 (green): y=12, spans x=[-5, 1], gap on RIGHT x=[1.5, 5] -->
+    <model name="maze_wall_3">
+      <static>true</static>
+      <pose>-2.0 12 1.5 0 0 0</pose>
+      <link name="wall_link">
+        <visual name="wall_visual">
+          <geometry>
+            <box><size>6.0 0.5 3.0</size></box>
+          </geometry>
+          <material>
+            <ambient>0.2 0.7 0.2 1</ambient>
+            <diffuse>0.2 0.8 0.2 1</diffuse>
+          </material>
+        </visual>
+        <collision name="wall_collision">
+          <geometry>
+            <box><size>6.0 0.5 3.0</size></box>
           </geometry>
         </collision>
       </link>

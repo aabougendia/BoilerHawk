@@ -171,11 +171,19 @@ def generate_launch_description():
         output='screen',
     )
 
-    # Static TF: world → odom
+    # Static TF: world → odom (identity)
     static_tf_world_odom = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
         arguments=['0', '0', '0', '0', '0', '0', 'world', 'odom'],
+        output='screen',
+    )
+
+    # Static TF: world → map (identity — lets RViz resolve map-frame data)
+    static_tf_world_map = Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        arguments=['0', '0', '0', '0', '0', '0', 'world', 'map'],
         output='screen',
     )
 
@@ -223,6 +231,22 @@ def generate_launch_description():
             {'max_range': 5.0},
             {'inflate_radius': 0.6},
             {'grid_frame': 'map'},
+            # Fixed world-frame grid (covers full maze area)
+            {'grid_origin_x': -5.0},
+            {'grid_origin_y': -2.0},
+            {'grid_width_m': 10.0},
+            {'grid_height_m': 20.0},
+            # Ground-point filtering
+            {'cam_pitch': 0.2},
+            {'cam_z_offset': 0.05},
+            {'min_obstacle_height': 0.5},
+            # Frame-based detection with decay:
+            #   each frame: all cells decay by hit_decay,
+            #   detected cells gain hit_increment (capped per-frame).
+            #   Need min_hits to mark occupied.
+            {'min_hits': 5},
+            {'hit_increment': 3},
+            {'hit_decay': 1},
         ],
         output='screen',
     )
@@ -239,8 +263,8 @@ def generate_launch_description():
             {'planning_frequency': 2.0},
             {'start_x': 0.0},
             {'start_y': 0.0},
-            {'goal_x': 10.0},
-            {'goal_y': 10.0},
+            {'goal_x': 3.0},
+            {'goal_y': 15.0},
         ],
         output='screen',
     )
@@ -273,6 +297,7 @@ def generate_launch_description():
         bridge_camera_points,
         bridge_camera_info,
         static_tf_world_odom,
+        static_tf_world_map,
         mavros_tf_broadcaster,
         rviz,
         # Stage 2

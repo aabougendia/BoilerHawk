@@ -44,7 +44,8 @@ BoilerHawk is a fully integrated ROS 2 robotics stack that flies an Iris quadcop
 │  @ 10 Hz     │                  │ Point cloud  │        │ MAVROS I/F   │
 └──────────────┘                  │ → Occupancy  │        │ Auto-arm     │
                                   │   grid       │        │ Yaw-toward-  │
-                                  │ + inflation  │        │   waypoint   │
+                                  │ + decay +    │        │   waypoint   │
+                                  │   inflation  │
                                   └──────┬───────┘        └──────▲───────┘
                                          │                       │
                                 /occupancy_grid           /local_path
@@ -54,9 +55,9 @@ BoilerHawk is a fully integrated ROS 2 robotics stack that flies an Iris quadcop
                                   │   Planning   │───────────────┘
                                   │              │
                                   │ Straight-line│
-                                  │ global path  │
-                                  │ + A* local   │
-                                  │   replanning │
+                                  │ global +     │
+                                  │ A* local     │
+                                  │ replanning   │
                                   └──────────────┘
 ```
 
@@ -82,7 +83,7 @@ The drone will automatically:
 1. Wait for ArduPilot SITL and MAVROS to connect (~25 s)
 2. Switch to GUIDED mode
 3. Arm and take off to 2 m altitude
-4. Follow waypoints from (0, 0) → (10, 10), avoiding the two wall obstacles at (4, 4) and (7, 7)
+4. Navigate a zigzag maze from (0, 0) → (3, 15), finding gaps in three corridor walls using A\* replanning
 
 <br>
 
@@ -161,12 +162,13 @@ Contains all Gazebo simulation assets: SDF world files, drone model, launch file
 
 #### World: `outdoor_world_ardupilot.sdf`
 
-An outdoor environment with:
-- Ground plane, building, pine trees, rocks, construction cone and barrel
-- Two test obstacles on the (0,0) → (10,10) diagonal:
-  - **Red wall** at (4, 4) — 1.0 × 1.0 × 3.0 m
-  - **Blue wall** at (7, 7) — 0.8 × 0.8 × 3.0 m
-- Iris quadcopter spawned at origin with the depth camera model included
+A maze corridor environment with:
+- Ground plane (flat green)
+- Three 6 m × 0.5 m × 3 m walls creating a zigzag corridor:
+  - **Wall 1 (red)** at y = 4: spans x = [−5, 1], gap on the right
+  - **Wall 2 (blue)** at y = 8: spans x = [−1, 5], gap on the left
+  - **Wall 3 (green)** at y = 12: spans x = [−5, 1], gap on the right
+- Iris quadcopter spawned at origin with depth camera
 - Physics: 1 ms step size, shadows disabled for performance
 - Spherical coordinates set for ArduPilot GPS (Canberra, Australia default)
 
@@ -230,22 +232,37 @@ Converts raw depth camera point clouds into an occupancy grid for the planner.
 **Publications:**
 | Topic | Type | Description |
 |-------|------|-------------|
-| `/occupancy_grid` | `OccupancyGrid` | 2D grid centered on the drone, published every point cloud frame |
+| `/occupancy_grid` | `OccupancyGrid` | Fixed world-frame 2D grid, published every point cloud frame |
 
 **Parameters:**
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `resolution` | `0.2` | Grid cell size in meters |
-| `max_range` | `5.0` | Grid extends ±5 m from drone (50×50 grid) |
+| `max_range` | `5.0` | Points beyond this distance are discarded |
 | `inflate_radius` | `0.6` | Obstacles are expanded by this radius for safety margin |
 | `grid_frame` | `map` | TF frame ID for the published grid |
+| `grid_origin_x` | `-5.0` | World-frame X origin of the fixed grid |
+| `grid_origin_y` | `-2.0` | World-frame Y origin of the fixed grid |
+| `grid_width_m` | `10.0` | Grid width in meters |
+| `grid_height_m` | `20.0` | Grid height in meters (covers the full maze) |
+| `cam_pitch` | `0.2` | Camera downward tilt in radians (≈ 11°) |
+| `cam_z_offset` | `0.05` | Camera mount height offset |
+| `min_obstacle_height` | `0.5` | Points below this world-Z are filtered as ground |
+| `min_hits` | `5` | Frame-detection count required to mark a cell occupied |
+| `hit_increment` | `3` | Score added per frame to each newly-detected cell |
+| `hit_decay` | `1` | Score subtracted from every cell every frame |
 
 **Processing pipeline:**
-1. Read `PointCloud2`, filter by `max_range`
-2. Rotate points by drone yaw, translate to world frame (ENU)
-3. Rasterize into a 50×50 occupancy grid centered on the drone
-4. **Inflate** all occupied cells by `inflate_radius` / `resolution` cells (iterative 8-connected dilation) — this ensures the planner treats thin walls as thick obstacles, giving the drone a safe clearance buffer
-5. Publish as `OccupancyGrid`
+1. Read `PointCloud2` (structured, named fields) and filter out inf/NaN values
+2. Auto-detect frame convention (sensor-link vs optical) on the first cloud
+3. Filter by range (0.3 m to `max_range`)
+4. Undo fixed camera pitch to get body-frame coordinates
+5. Apply **full quaternion rotation** (from MAVROS pose) to transform body → world frame — this accounts for drone roll and pitch during flight, critical because forward-flight tilt would otherwise bias ground points upward
+6. **Height filter:** keep only points with `min_obstacle_height < world_z < 4.0 m`
+7. **Decay** only **unconfirmed** cells (hit count below `min_hits`) by `hit_decay` every frame — once a cell reaches `min_hits` it becomes a **permanent obstacle** and is never decayed, ensuring confirmed walls are never forgotten even when outside the camera's field of view
+8. **Per-frame binary rasterization:** each cell gains at most `+hit_increment` per frame regardless of how many points fall in it (prevents a single noisy frame from overwhelming the threshold)
+9. Mark cells with `≥ min_hits` as occupied, then **inflate** by `inflate_radius` (iterative 8-connected dilation)
+10. Publish as `OccupancyGrid`
 
 ---
 
@@ -276,7 +293,7 @@ Path planning using A\* on the live occupancy grid with a two-tier strategy:
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `start_x`, `start_y` | `0.0, 0.0` | Start position in meters |
-| `goal_x`, `goal_y` | `10.0, 10.0` | Goal position in meters |
+| `goal_x`, `goal_y` | `3.0, 15.0` | Goal position in meters (after the last maze wall) |
 | `occupancy_threshold` | `50` | Grid values ≥ this are treated as occupied |
 | `lookahead_distance` | `30` | Waypoints ahead to include in local path |
 | `planning_frequency` | `2.0` | How often (Hz) to check for obstacles and update local path |
@@ -332,7 +349,10 @@ The MAVROS interface — receives paths from planning and sends position setpoin
 | `target_altitude` | `2.0` | Fixed flight altitude (m) |
 
 **Key behaviors:**
-- **Auto-sequencing:** On MAVROS connection → switch to GUIDED → arm → takeoff → begin waypoint following. No manual intervention needed.
+- **Auto-sequencing:** On MAVROS connection → wait 60 s for GPS/EKF convergence → switch to GUIDED → arm → takeoff → begin waypoint following. No manual intervention needed.
+- **60-second arming delay:** After MAVROS first connects, the node waits 60 s before the first arm attempt. This gives ArduPilot's GPS/EKF time to converge in SITL, preventing repeated arm → immediate-disarm cycles that would otherwise delay takeoff by several minutes.
+- **Hover setpoints during takeoff:** While the drone is climbing to `target_altitude`, the node continuously publishes position setpoints at the target altitude. This prevents ArduPilot from disarming due to lack of offboard commands during the takeoff phase.
+- **Disarm recovery:** If ArduPilot disarms unexpectedly (e.g., EKF variance spike), the node detects the armed → disarmed transition, resets takeoff state, and re-initiates the arm → takeoff sequence automatically.
 - **Yaw-toward-waypoint:** Computes `yaw = atan2(dy, dx)` from current position to the target waypoint and sets the orientation quaternion. This keeps the forward-facing depth camera pointed in the direction of travel.
 - **Smart path indexing:** On each new path, finds the closest waypoint then skips forward past any already-reached waypoints to prevent back-tracking.
 - **Throttle failsafe override:** Continuously publishes RC channel 3 = 1500 to prevent ArduPilot's low-throttle failsafe from triggering in SITL.
@@ -383,7 +403,7 @@ world → odom → base_link
 ### Changing the Goal
 
 ```bash
-./launch_sim.sh goal_x:=15.0 goal_y:=5.0
+./launch_sim.sh goal_x:=5.0 goal_y:=20.0
 ```
 
 Or edit the defaults in `src/sim_models/launch/stage123_control.launch.py`.
@@ -394,32 +414,38 @@ Or edit the defaults in `src/sim_models/launch/stage123_control.launch.py`.
 |------|------|---------------|
 | Flight altitude | `src/control/config/control_params.yaml` | `target_altitude` |
 | Waypoint reach distance | `src/control/config/control_params.yaml` | `waypoint_threshold` |
-| Obstacle safety margin | Launch file (`stage123_control.launch.py`) | `inflate_radius` |
-| Grid resolution | Launch file | `resolution` |
-| Sensor range | Launch file | `max_range` |
+| Obstacle safety margin | Launch file (`stage123_control.launch.py`) | `inflate_radius` (0.6 m) |
+| Grid resolution | Launch file | `resolution` (0.2 m) |
+| Sensor range | Launch file | `max_range` (5.0 m) |
+| Ground filter height | Launch file | `min_obstacle_height` (0.5 m) |
+| Detection threshold | Launch file | `min_hits`, `hit_increment`, `hit_decay` |
 | Replan cooldown | `src/planning/planning/planning_node.py` | `5_000_000_000` ns (5 s) |
 | Camera resolution | `src/sim_models/models/iris_with_depth_cam/model.sdf` | `<width>`, `<height>` |
 
-### Adding Obstacles
+### Adding Maze Walls
 
-Edit `src/sim_models/worlds/outdoor_world_ardupilot.sdf` and add a new `<model>` block:
+Edit `src/sim_models/worlds/outdoor_world_ardupilot.sdf` and add a new `<model>` block. Walls use `<pose>X Y 1.5 0 0 0</pose>` (centered vertically at half-height):
 
 ```xml
-<model name="my_obstacle">
+<model name="my_wall">
   <static>true</static>
   <pose>X Y 1.5 0 0 0</pose>
-  <link name="link">
-    <visual name="visual">
-      <geometry><box><size>1.0 1.0 3.0</size></box></geometry>
+  <link name="wall_link">
+    <visual name="wall_visual">
+      <geometry><box><size>WIDTH 0.5 3.0</size></box></geometry>
+      <material>
+        <ambient>0.8 0.2 0.2 1</ambient>
+        <diffuse>0.9 0.2 0.2 1</diffuse>
+      </material>
     </visual>
-    <collision name="collision">
-      <geometry><box><size>1.0 1.0 3.0</size></box></geometry>
+    <collision name="wall_collision">
+      <geometry><box><size>WIDTH 0.5 3.0</size></box></geometry>
     </collision>
   </link>
 </model>
 ```
 
-Then rebuild `sim_models`:
+Ensure the grid in the launch file covers the new obstacle area (`grid_origin_*`, `grid_width_m`, `grid_height_m`). Then rebuild:
 
 ```bash
 colcon build --packages-select sim_models
@@ -489,7 +515,7 @@ BoilerHawk/
 │   │
 │   ├── perception/                        # [ament_python] Point cloud → occupancy grid
 │   │   └── perception/
-│   │       └── perception.py              # PerceptionNode (inflate, transform, grid)
+│   │       └── perception.py              # PerceptionNode (world-frame grid, decay, quaternion transform)
 │   │
 │   ├── planning/                          # [ament_python] A* path planning
 │   │   ├── planning/
@@ -512,7 +538,8 @@ BoilerHawk/
 │
 ├── build/                                 # colcon build output (gitignored)
 ├── install/                               # colcon install output (gitignored)
-└── log/                                   # colcon log output (gitignored)
+├── log/                                   # colcon log output (gitignored)
+└── logs/                                  # Runtime file logs (perception, planning, control)
 ```
 
 <br>
@@ -532,7 +559,7 @@ The project began with a clear top-level requirement: an autonomous drone that c
 Development followed an incremental integration strategy. Each subsystem was built and validated in isolation before being composed with the others:
 
 1. **Simulation environment** — The Gazebo world and drone model were tested first by verifying sensor output (depth images, point clouds) and ArduPilot SITL connectivity before any autonomy code existed.
-2. **Perception pipeline** — Point cloud → occupancy grid conversion was validated by echoing `/occupancy_grid` and comparing reported occupied cells against known obstacle positions in the world. Early tests revealed that raw occupied cells were too thin for reliable avoidance, leading to the addition of **obstacle inflation** (0.6 m dilation radius) — a design decision driven directly by experimental failure data.
+2. **Perception pipeline** — Point cloud → occupancy grid conversion went through multiple design iterations driven by flight-test data. The initial drone-centered grid was replaced with a **fixed world-frame grid** once testing showed that a moving grid lost track of previously-seen obstacles. Ground filtering, first implemented as a simple yaw-based rotation, was upgraded to **full quaternion rotation** after in-flight data revealed that forward-flight pitch tilt (10–15°) biased ground points upward by 0.3–1.5 m, causing false obstacle detections. Point accumulation was further refined from raw per-point counting to a **frame-based binary detection with decay** system — each cell gains a fixed score per detection frame and decays every frame — after analysis showed that asynchronous pose/cloud timing mismatches produce unavoidable transient false positives that a decay mechanism naturally filters out while preserving persistent real-wall detections.
 3. **Path planning** — A\* was first tested on a static grid with 18 unit tests covering empty grids, mazes, narrow passages, unreachable goals, and coordinate round-trips. When integrated with the live perception grid, experiments showed that a pure A\* global planner failed for goals outside the 10 m sensor range. This led to the **two-tier architecture**: a straight-line global path with local A\* replanning only when obstacles enter the grid — a key architectural pivot driven by data from failed flight tests.
 4. **Control** — Waypoint-following was validated in obstacle-free flights first (start → goal in open space), confirming smooth convergence. Yaw control was added after observing that the drone flew sideways, leaving the forward-facing depth camera blind to upcoming obstacles.
 
@@ -552,8 +579,7 @@ Several design decisions required balancing competing constraints:
 | Decision | Trade-off | Rationale |
 |----------|-----------|-----------|
 | 0.2 m grid resolution | Finer resolution detects smaller gaps but increases A\* computation | 0.2 m is ≈ 2× the airframe radius — sufficient for clearance without excessive cost |
-| 0.6 m inflation radius | Larger margin is safer but may close off valid passages | Chosen to exceed the drone's physical radius while keeping standard doorway-width gaps navigable |
-| Physics step = 1 ms | Smaller steps improve accuracy but reduce real-time factor | ArduPilot requires ≥ 400 Hz main loop; 1 ms was the maximum step that maintained stable flight |
+| 0.6 m inflation radius | Larger margin is safer but may close off valid passages | Bumped from 0.4 m after diagonal grazing incidents; still keeps 3.5 m maze gaps navigable with adequate clearance || Decay-based hit counting with permanent obstacles | Aggressive decay may drop real obstacles; no decay lets noise accumulate | Increment 3 / decay 1 means a cell seen 2+ consecutive frames becomes occupied, while single-frame noise fades in 3 frames. Once a cell reaches `min_hits` it is **never decayed**, preventing confirmed walls from disappearing when outside the camera FOV || Physics step = 1 ms | Smaller steps improve accuracy but reduce real-time factor | ArduPilot requires ≥ 400 Hz main loop; 1 ms was the maximum step that maintained stable flight |
 | Straight-line global path | Simpler than full global A\* but doesn't pre-plan around distant obstacles | Acceptable because the drone replans locally as it approaches each obstacle; a global planner would need a pre-built map that doesn't exist |
 | 5 s replan cooldown | Prevents oscillation but delays reaction to new obstacles | Balances stability against responsiveness; at 2 m/s cruise the drone covers 10 m between replans, within sensor range |
 
@@ -561,7 +587,7 @@ Several design decisions required balancing competing constraints:
 
 The system was validated at multiple levels:
 - **Unit tests** (18 path planner + control tests) verify algorithmic correctness in isolation
-- **Integration flights** confirm end-to-end behavior: the drone successfully navigates from (0, 0) to (10, 10) while detouring around both wall obstacles
+- **Integration flights** confirm end-to-end behavior: the drone successfully navigates a zigzag maze corridor, finding gaps in three walls to reach the goal
 - **Regression testing** after each change ensures previous fixes remain intact (e.g., verifying that the physics step revert didn't break arming, that inflation didn't close off valid paths)
 
 This structured process — grounded in empirical testing, quantitative analysis of topic data, and deliberate engineering trade-offs — transformed an initial collection of ROS 2 packages into a cohesive autonomous system.
