@@ -28,6 +28,9 @@ class PerceptionNode(Node):
         self.max_range = float(self.get_parameter('max_range').value)
         self.grid_frame = str(self.get_parameter('grid_frame').value)
 
+        self.declare_parameter('inflate_radius', 0.6)
+        self.inflate_radius = float(self.get_parameter('inflate_radius').value)
+
         if self.resolution <= 0.0:
             self.get_logger().warning('Resolution must be positive; defaulting to 0.1 m')
             self.resolution = 0.1
@@ -135,6 +138,21 @@ class PerceptionNode(Node):
 
         # Mark occupied cells (100 means occupied)
         grid[y_idx, x_idx] = 100
+
+        # Inflate obstacles — expand occupied cells by inflate_radius
+        inflate_cells = int(round(self.inflate_radius / self.resolution))
+        if inflate_cells > 0:
+            occupied = (grid == 100)
+            for _ in range(inflate_cells):
+                padded = np.pad(occupied, 1, mode='constant', constant_values=False)
+                occupied = (
+                    padded[1:-1, 1:-1] |
+                    padded[:-2, 1:-1] | padded[2:, 1:-1] |
+                    padded[1:-1, :-2] | padded[1:-1, 2:] |
+                    padded[:-2, :-2] | padded[:-2, 2:] |
+                    padded[2:, :-2] | padded[2:, 2:]
+                )
+            grid[occupied] = 100
 
         # Convert to OccupancyGrid message
         msg_out = OccupancyGrid()

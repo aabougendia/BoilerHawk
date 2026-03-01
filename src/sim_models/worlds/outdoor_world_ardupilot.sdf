@@ -181,12 +181,12 @@
       </link>
     </model>
 
-    <!-- ===== Obstacles blocking the (0,0)→(3,3) diagonal path ===== -->
+    <!-- ===== Obstacles blocking the (0,0)→(10,10) diagonal path ===== -->
 
-    <!-- Obstacle 1: wall at (1.5, 1.5) — blocks midpoint of path -->
+    <!-- Obstacle 1: red wall at (4, 4) -->
     <model name="obstacle_wall_1">
       <static>true</static>
-      <pose>1.5 1.5 1.5 0 0 0</pose>
+      <pose>4 4 1.5 0 0 0</pose>
       <link name="wall_link">
         <visual name="wall_visual">
           <geometry>
@@ -209,10 +209,10 @@
       </link>
     </model>
 
-    <!-- Obstacle 2: wall at (2.0, 2.5) — blocks upper diagonal -->
+    <!-- Obstacle 2: blue wall at (7, 7) -->
     <model name="obstacle_wall_2">
       <static>true</static>
-      <pose>2.0 2.5 1.5 0 0 0</pose>
+      <pose>7 7 1.5 0 0 0</pose>
       <link name="wall_link">
         <visual name="wall_visual">
           <geometry>

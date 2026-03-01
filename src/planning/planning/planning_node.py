@@ -52,6 +52,7 @@ class PlanningNode(Node):
         self.global_path_world = []      # full start→goal in world coords
         self.local_path_world = []       # upcoming segment for control
         self.current_world_pos = None    # (x, y) from /current_pose
+        self._last_replan_time = None    # cooldown to avoid rapid replans
 
         # ---- Subscribers ----
         self.occupancy_sub = self.create_subscription(
@@ -101,52 +102,104 @@ class PlanningNode(Node):
     # Path computation
     # ------------------------------------------------------------------
     def _compute_global_path(self):
-        """Run A* on the current grid and store the result in world coords."""
-        if not self.occupancy_grid_received:
-            return
+        """Generate initial global path as a straight line in world coords.
 
-        start_grid = self.path_planner.world_to_grid((self.start_x, self.start_y))
-        goal_grid = self.path_planner.world_to_grid((self.goal_x, self.goal_y))
+        A straight line is used because the occupancy grid is a small window
+        centred on the drone and may not contain the far-away goal for A*.
+        Obstacle avoidance is handled by local replanning in planning_callback.
+        """
+        self.global_path_world = self._straight_line_path(
+            self.start_x, self.start_y, self.goal_x, self.goal_y)
 
-        self.get_logger().info(
-            f'Computing global path from {start_grid} to {goal_grid}')
+        if self.global_path_world:
+            self._publish_world_path(
+                self.global_path_world, self.global_path_pub, 'map')
+            self.get_logger().info(
+                f'Global path (straight line): '
+                f'{len(self.global_path_world)} waypoints  '
+                f'({self.global_path_world[0]} → {self.global_path_world[-1]})')
+        else:
+            self.get_logger().error('Failed to compute global path')
+
+    # ------------------------------------------------------------------
+    # Helpers for straight-line / grid checking
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _straight_line_path(sx, sy, gx, gy, step=0.2):
+        """Return list of (x, y) waypoints along a straight line."""
+        dist = math.hypot(gx - sx, gy - sy)
+        if dist < 0.01:
+            return [(gx, gy)]
+        n_steps = max(1, int(dist / step))
+        return [
+            (sx + (i / n_steps) * (gx - sx),
+             sy + (i / n_steps) * (gy - sy))
+            for i in range(n_steps + 1)
+        ]
+
+    def _is_in_grid(self, wx, wy):
+        """Return True if (wx, wy) falls inside the current occupancy grid."""
+        pp = self.path_planner
+        if pp.grid_width == 0 or pp.grid_height == 0:
+            return False
+        col = round((wx - pp.grid_origin[0]) / pp.grid_resolution)
+        row = round((wy - pp.grid_origin[1]) / pp.grid_resolution)
+        return 0 <= row < pp.grid_height and 0 <= col < pp.grid_width
+
+    def _replan_around_obstacle(self, closest_idx):
+        """Use A* on the local grid to detour, stitch with remaining path."""
+        sx = self.current_world_pos[0] if self.current_world_pos else self.start_x
+        sy = self.current_world_pos[1] if self.current_world_pos else self.start_y
+
+        # Find the first CLEAR, in-grid waypoint past the detected obstacle.
+        # This avoids A*-ing toward a goal inside the obstacle.
+        stitch_idx = len(self.global_path_world)
+        obstacle_seen = False
+        for i in range(closest_idx, len(self.global_path_world)):
+            wx, wy = self.global_path_world[i]
+            if not self._is_in_grid(wx, wy):
+                stitch_idx = i
+                break
+            grid_cell = self.path_planner.world_to_grid((wx, wy))
+            if not self.path_planner.is_valid_cell(grid_cell):
+                obstacle_seen = True
+            elif obstacle_seen:
+                # First clear cell after the obstacle — good stitch point
+                stitch_idx = i
+                break
+
+        # A* target: stitch waypoint, or goal if we ran off the path
+        if stitch_idx < len(self.global_path_world):
+            target = self.global_path_world[stitch_idx]
+        else:
+            target = (self.goal_x, self.goal_y)
+
+        start_grid = self.path_planner.world_to_grid((sx, sy))
+        goal_grid = self.path_planner.world_to_grid(target)
 
         grid_path = self.path_planner.plan_global_path(start_grid, goal_grid)
         if grid_path:
-            # Convert to world coordinates immediately and store
-            self.global_path_world = [
+            astar_world = [
                 self.path_planner.grid_to_world(gp) for gp in grid_path]
+            # Stitch: A* detour + preserved waypoints beyond the obstacle
+            remaining = self.global_path_world[stitch_idx:]
+            self.global_path_world = astar_world + remaining
             self.get_logger().info(
-                f'Global path computed: {len(self.global_path_world)} waypoints  '
-                f'({self.global_path_world[0]} → {self.global_path_world[-1]})')
-            self._publish_world_path(
-                self.global_path_world, self.global_path_pub, 'map')
+                f'Replanned (A*): {len(self.global_path_world)} waypoints')
         else:
-            self.get_logger().error('Failed to compute global path')
+            # A* failed — keep current path
+            self.get_logger().warn(
+                'A* replan failed — keeping current path')
+
+        self._publish_world_path(
+            self.global_path_world, self.global_path_pub, 'map')
+        self._last_replan_time = self.get_clock().now()
 
     # ------------------------------------------------------------------
     def planning_callback(self):
         """Periodic: validate global path, extract local window, publish."""
         if not self.occupancy_grid_received or not self.global_path_world:
             return
-
-        # --- Check for obstacles on global path (replan if needed) ---
-        obstacle_found = False
-        for wp in self.global_path_world:
-            grid_cell = self.path_planner.world_to_grid(wp)
-            if not self.path_planner.is_valid_cell(grid_cell):
-                obstacle_found = True
-                break
-
-        if obstacle_found:
-            self.get_logger().warn('Obstacle on global path — replanning')
-            self.global_path_world = []
-            # Replan from current position (or start if no pose yet)
-            if self.current_world_pos is not None:
-                self.start_x, self.start_y = self.current_world_pos
-            self._compute_global_path()
-            if not self.global_path_world:
-                return
 
         # --- Determine current position ---
         if self.current_world_pos is not None:
@@ -162,6 +215,41 @@ class PlanningNode(Node):
             if d < min_dist:
                 min_dist = d
                 closest_idx = idx
+
+        # --- Check ONLY waypoints AHEAD of the drone for obstacles ---
+        # Ignore obstacles behind us — the drone already passed them.
+        obstacle_found = False
+        look_end = min(closest_idx + self.lookahead_distance,
+                       len(self.global_path_world))
+        for i in range(closest_idx, look_end):
+            wp = self.global_path_world[i]
+            if not self._is_in_grid(wp[0], wp[1]):
+                continue
+            grid_cell = self.path_planner.world_to_grid(wp)
+            if not self.path_planner.is_valid_cell(grid_cell):
+                obstacle_found = True
+                break
+
+        if obstacle_found:
+            # Cooldown: don't replan more than once every 5 seconds
+            now = self.get_clock().now()
+            if (self._last_replan_time is not None
+                    and (now - self._last_replan_time).nanoseconds
+                    < 5_000_000_000):
+                pass  # skip — too soon
+            else:
+                self.get_logger().warn('Obstacle ahead — replanning')
+                self._replan_around_obstacle(closest_idx)
+                if not self.global_path_world:
+                    return
+                # Recompute closest_idx on the new path
+                min_dist = float('inf')
+                closest_idx = 0
+                for idx, (wx, wy) in enumerate(self.global_path_world):
+                    d = math.hypot(wx - cx, wy - cy)
+                    if d < min_dist:
+                        min_dist = d
+                        closest_idx = idx
 
         # --- Extract local path window ---
         end_idx = min(closest_idx + self.lookahead_distance,

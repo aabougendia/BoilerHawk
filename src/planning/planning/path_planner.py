@@ -166,12 +166,16 @@ class PathPlanner:
             return []
         
         if not self.is_valid_cell(start):
-            print(f"Error: Start position {start} is not valid")
-            return []
+            start = self._nearest_free_cell(start)
+            if start is None:
+                print(f"Error: No free cell near start")
+                return []
         
         if not self.is_valid_cell(goal):
-            print(f"Error: Goal position {goal} is not valid")
-            return []
+            goal = self._nearest_free_cell(goal)
+            if goal is None:
+                print(f"Error: No free cell near goal")
+                return []
         
         # Initialize start and goal nodes
         start_node = Node(start)
@@ -290,6 +294,29 @@ class PathPlanner:
         self.local_path = local_segment
         return self.local_path
     
+    def _nearest_free_cell(self, pos: Tuple[int, int],
+                           max_radius: int = 15) -> Optional[Tuple[int, int]]:
+        """Find the nearest free (valid) grid cell via BFS spiral."""
+        from collections import deque
+        row, col = pos
+        visited = {(row, col)}
+        queue = deque([(row, col)])
+        while queue:
+            r, c = queue.popleft()
+            if 0 <= r < self.grid_height and 0 <= c < self.grid_width:
+                if self.occupancy_grid[r, c] < self.occupancy_threshold \
+                        and self.occupancy_grid[r, c] != -1:
+                    return (r, c)
+            dist = abs(r - row) + abs(c - col)
+            if dist >= max_radius:
+                continue
+            for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                nr, nc = r + dr, c + dc
+                if (nr, nc) not in visited:
+                    visited.add((nr, nc))
+                    queue.append((nr, nc))
+        return None
+
     def grid_to_world(self, grid_pos: Tuple[int, int]) -> Tuple[float, float]:
         """
         Convert grid coordinates to world coordinates.

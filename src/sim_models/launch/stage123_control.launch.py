@@ -221,6 +221,7 @@ def generate_launch_description():
             {'pose_topic': '/mavros/local_position/pose'},
             {'resolution': 0.2},
             {'max_range': 5.0},
+            {'inflate_radius': 0.6},
             {'grid_frame': 'map'},
         ],
         output='screen',
@@ -234,12 +235,12 @@ def generate_launch_description():
         name='planning_node',
         parameters=[
             {'occupancy_threshold': 50},
-            {'lookahead_distance': 20},
+            {'lookahead_distance': 30},
             {'planning_frequency': 2.0},
             {'start_x': 0.0},
             {'start_y': 0.0},
-            {'goal_x': 3.0},
-            {'goal_y': 3.0},
+            {'goal_x': 10.0},
+            {'goal_y': 10.0},
         ],
         output='screen',
     )

@@ -468,14 +468,26 @@ class ControlNode(Node):
         
         waypoint = self.current_path.poses[self.current_waypoint_idx]
         
-        # Create setpoint with target altitude
+        # Compute yaw so the drone faces toward the target waypoint
+        yaw = 0.0
+        if self.current_pose is not None:
+            dx = waypoint.pose.position.x - self.current_pose.pose.position.x
+            dy = waypoint.pose.position.y - self.current_pose.pose.position.y
+            if math.sqrt(dx*dx + dy*dy) > 0.1:  # avoid jitter when very close
+                yaw = math.atan2(dy, dx)
+        
+        # Create setpoint with target altitude and computed yaw
         self.target_setpoint = PoseStamped()
         self.target_setpoint.header.stamp = self.get_clock().now().to_msg()
         self.target_setpoint.header.frame_id = 'map'
         self.target_setpoint.pose.position.x = waypoint.pose.position.x
         self.target_setpoint.pose.position.y = waypoint.pose.position.y
-        self.target_setpoint.pose.position.z = self.target_altitude  # Use configured altitude
-        self.target_setpoint.pose.orientation = waypoint.pose.orientation
+        self.target_setpoint.pose.position.z = self.target_altitude
+        # Quaternion from yaw (roll=0, pitch=0)
+        self.target_setpoint.pose.orientation.x = 0.0
+        self.target_setpoint.pose.orientation.y = 0.0
+        self.target_setpoint.pose.orientation.z = math.sin(yaw / 2.0)
+        self.target_setpoint.pose.orientation.w = math.cos(yaw / 2.0)
         
         if log:
             self.get_logger().info(
