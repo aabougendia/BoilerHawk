@@ -21,6 +21,7 @@ BoilerHawk is a fully integrated ROS 2 robotics stack that flies an Iris quadcop
 - [ROS 2 Topic Map](#ros-2-topic-map)
 - [Configuration](#configuration)
 - [Testing](#testing)
+- [Troubleshooting](#troubleshooting)
 - [Project Structure](#project-structure)
 
 <br>
@@ -79,11 +80,19 @@ source install/setup.bash
 ./launch_sim.sh
 ```
 
-The drone will automatically:
-1. Wait for ArduPilot SITL and MAVROS to connect (~25 s)
-2. Switch to GUIDED mode
-3. Arm and take off to 2 m altitude
-4. Navigate a zigzag maze from (0, 0) → (3, 15), finding gaps in three corridor walls using A\* replanning
+**What happens after launch (be patient — the full startup takes ~2 minutes):**
+
+| Time | What you'll see |
+|------|-----------------|
+| 0 – 5 s | Gazebo window opens with the maze world; ROS nodes start |
+| ~2 s | ArduPilot SITL begins booting (MAVProxy console may flash briefly) |
+| ~5 s | RViz opens |
+| ~25 s | MAVROS connects — you'll see `Connected to flight controller` in the terminal |
+| 25 – 85 s | **GPS/EKF convergence wait.** The control node intentionally waits **60 seconds** after MAVROS connects before attempting to arm. You will see periodic `Waiting for GPS/EKF: Xs remaining` log messages. **This is normal — do not restart.** ArduPilot's EKF needs time to converge on a stable position estimate; arming too early causes immediate disarm. |
+| ~85 s | The drone switches to GUIDED mode, arms, and takes off to 2 m altitude |
+| ~90 s+ | Autonomous navigation begins — the drone flies through the zigzag maze from (0, 0) → (3, 15) |
+
+> **If the drone arms then immediately disarms and you do NOT see the "Waiting for GPS/EKF" messages**, your `control_params.yaml` may not have `auto_arm: true`. See [Troubleshooting](#troubleshooting).
 
 <br>
 
@@ -100,46 +109,99 @@ The drone will automatically:
 | **MAVROS** | ROS 2 Jazzy build | MAVLink ↔ ROS 2 bridge |
 | **Python** | 3.12+ | All node source code |
 
-Additional ROS 2 packages: `ros_gz_bridge`, `ros_gz_sim`, `tf2_ros`, `cv_bridge`, `sensor_msgs_py`.
-
 <br>
 
 ---
 
 ## Installation
 
-### 1. ArduPilot SITL
+> **Important:** Follow every step in order. Skipping a step (especially environment variables or the ArduPilot WAF build) will cause silent failures at runtime — typically the drone arms then immediately disarms.
+
+### 1. ROS 2 Packages
+
+Install required ROS 2 packages that are not part of the default desktop install:
+
+```bash
+sudo apt update
+sudo apt install -y \
+  ros-jazzy-mavros ros-jazzy-mavros-extras \
+  ros-jazzy-ros-gzharmonic \
+  ros-jazzy-tf2-ros ros-jazzy-cv-bridge \
+  python3-sensor-msgs-py
+```
+
+Then install MAVROS's geographic dependency data (required for GPS):
+
+```bash
+sudo /opt/ros/jazzy/lib/mavros/install_geographiclib_datasets.sh
+```
+
+### 2. ArduPilot SITL
 
 ```bash
 git clone --recurse-submodules https://github.com/ArduPilot/ardupilot.git ~/ardupilot
-cd ~/ardupilot && Tools/environment_install/install-prereqs-ubuntu.sh -y
-. ~/.profile
+cd ~/ardupilot
+Tools/environment_install/install-prereqs-ubuntu.sh -y
 ```
 
-### 2. ArduPilot Gazebo Plugin
+**Reload your environment** (this adds ArduPilot tools to your PATH):
 
 ```bash
+source ~/.profile
+```
+
+**Build the SITL binary** (this is required — `sim_vehicle.py` will fail without it):
+
+```bash
+cd ~/ardupilot
+./waf configure --board sitl
+./waf copter
+```
+
+### 3. ArduPilot Gazebo Plugin
+
+```bash
+export GZ_VERSION=harmonic
 git clone https://github.com/ArduPilot/ardupilot_gazebo.git ~/ardupilot_gazebo
 cd ~/ardupilot_gazebo && mkdir build && cd build
 cmake .. -DCMAKE_BUILD_TYPE=RelWithDebInfo && make -j4
 ```
 
-### 3. Gazebo Model Path
+### 4. Environment Variables
 
-Add to `~/.bashrc`:
+Add **all** of the following to your `~/.bashrc`:
 
 ```bash
-export GZ_SIM_RESOURCE_PATH=$GZ_SIM_RESOURCE_PATH:~/BoilerHawk/BoilerHawk/src/sim_models/models:~/ardupilot_gazebo/models
-export GZ_SIM_SYSTEM_PLUGIN_PATH=$GZ_SIM_SYSTEM_PLUGIN_PATH:~/ardupilot_gazebo/build
+# ArduPilot Gazebo Harmonic integration
+export GZ_VERSION=harmonic
+export GZ_SIM_SYSTEM_PLUGIN_PATH=$HOME/ardupilot_gazebo/build:${GZ_SIM_SYSTEM_PLUGIN_PATH}
+export GZ_SIM_RESOURCE_PATH=$HOME/ardupilot_gazebo/models:$HOME/ardupilot_gazebo/worlds:${GZ_SIM_RESOURCE_PATH}
+export GZ_SIM_RESOURCE_PATH=$HOME/BoilerHawk/BoilerHawk/src/sim_models/models:${GZ_SIM_RESOURCE_PATH}
 ```
 
-### 4. Build BoilerHawk
+Then **restart your terminal** (or run `source ~/.bashrc`).
+
+**Verify** your environment is set correctly:
 
 ```bash
+# Should print paths containing ardupilot_gazebo and BoilerHawk
+echo $GZ_SIM_RESOURCE_PATH
+echo $GZ_SIM_SYSTEM_PLUGIN_PATH
+
+# sim_vehicle.py should be on PATH
+which sim_vehicle.py
+```
+
+### 5. Clone & Build BoilerHawk
+
+```bash
+git clone https://github.com/aabougendia/BoilerHawk.git ~/BoilerHawk
 cd ~/BoilerHawk/BoilerHawk
 colcon build --symlink-install
 source install/setup.bash
 ```
+
+> **Tip:** Add `source ~/BoilerHawk/BoilerHawk/install/setup.bash` to your `~/.bashrc` so you don't have to run it every time you open a new terminal.
 
 <br>
 
@@ -484,6 +546,79 @@ ros2 topic hz /occupancy_grid                 # should be ~10 Hz
 
 # Check the planned path:
 ros2 topic echo /local_path --field poses --once
+```
+
+<br>
+
+---
+
+## Troubleshooting
+
+### Drone arms then immediately disarms (never takes off)
+
+This is the most common issue for new setups. ArduPilot will refuse to stay armed if its EKF (Extended Kalman Filter) hasn't converged on a stable position estimate. Causes:
+
+1. **You're not waiting long enough.** The control node intentionally delays arming for 60 seconds after MAVROS connects. The full startup sequence takes **~90 seconds** from `./launch_sim.sh` to first arm attempt. Look for `Waiting for GPS/EKF: Xs remaining` in the terminal output.
+
+2. **GeographicLib datasets not installed.** MAVROS needs geographic reference data for GPS. If you skipped this step, MAVROS will connect but GPS will never converge:
+   ```bash
+   sudo /opt/ros/jazzy/lib/mavros/install_geographiclib_datasets.sh
+   ```
+
+3. **ArduPilot SITL not fully built.** If you cloned ArduPilot but didn't run the WAF build, `sim_vehicle.py` will either fail or produce a broken SITL instance:
+   ```bash
+   cd ~/ardupilot
+   ./waf configure --board sitl
+   ./waf copter
+   ```
+
+4. **Environment variables not loaded.** If `GZ_SIM_SYSTEM_PLUGIN_PATH` doesn't include the ArduPilot Gazebo plugin, Gazebo won't load the ArduPilot interface and SITL won't receive physics data. Verify:
+   ```bash
+   echo $GZ_SIM_SYSTEM_PLUGIN_PATH   # must contain ~/ardupilot_gazebo/build
+   echo $GZ_SIM_RESOURCE_PATH         # must contain the models directories
+   ```
+   If empty, re-add to `~/.bashrc` (see [Installation step 4](#4-environment-variables)) and restart your terminal.
+
+5. **Slow machine / low real-time factor.** ArduPilot expects physics updates at ≥ 400 Hz. If Gazebo's real-time factor drops too low (< 0.3), the EKF may never converge. Check the real-time factor in the Gazebo bottom bar. If it's low, try closing other applications or reducing camera resolution in the drone model SDF.
+
+### Gazebo opens but the drone model doesn't appear
+
+`GZ_SIM_RESOURCE_PATH` is missing the BoilerHawk models directory. The world file uses `model://iris_with_depth_cam`, which Gazebo resolves via this environment variable. Fix:
+
+```bash
+export GZ_SIM_RESOURCE_PATH=$HOME/BoilerHawk/BoilerHawk/src/sim_models/models:${GZ_SIM_RESOURCE_PATH}
+```
+
+### `sim_vehicle.py: command not found`
+
+ArduPilot's tools aren't on your PATH. Run:
+
+```bash
+source ~/.profile
+```
+
+Or add `~/ardupilot/Tools/autotest` to your PATH in `~/.bashrc`.
+
+### MAVROS never connects (no heartbeat)
+
+The launch file starts MAVROS 25 seconds after Gazebo to give SITL time to boot. If SITL is slow to start on your machine, MAVROS may time out. Check:
+
+```bash
+# In a second terminal:
+source install/setup.bash
+ros2 topic list | grep mavros
+```
+
+If no MAVROS topics appear after 60 s, try increasing the MAVROS delay in `stage123_control.launch.py` (change the `period=25.0` for `mavros_node` to 35 or 40).
+
+### `colcon build` fails
+
+Make sure you have ROS 2 Jazzy sourced before building:
+
+```bash
+source /opt/ros/jazzy/setup.bash
+cd ~/BoilerHawk/BoilerHawk
+colcon build --symlink-install
 ```
 
 <br>
