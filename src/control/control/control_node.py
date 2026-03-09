@@ -67,6 +67,7 @@ class ControlNode(Node):
         # Takeoff state tracking
         self.takeoff_complete = False
         self.takeoff_requested = False
+        self.takeoff_timer = None
         
         # State variables
         self.current_path = None
@@ -281,6 +282,10 @@ class ControlNode(Node):
                 self.flog.warning('Disarm detected, resetting takeoff state')
                 self.takeoff_requested = False
                 self.takeoff_complete = False
+                # Cancel any pending takeoff timer from the previous cycle
+                if self.takeoff_timer is not None:
+                    self.takeoff_timer.cancel()
+                    self.takeoff_timer = None
         
         # Request takeoff when armed and in GUIDED mode (only if auto_arm is on)
         if self.auto_arm and msg.armed and msg.mode == 'GUIDED' and not self.takeoff_requested:
@@ -330,7 +335,9 @@ class ControlNode(Node):
            self.mavros_state.armed and \
            self.mavros_state.mode == 'GUIDED' and \
            msg.pose.position.z >= (self.target_altitude * 0.9):
-            self.get_logger().info(f'Altitude {msg.pose.position.z:.2f}m reached - marking takeoff complete')
+            self.get_logger().info(
+                f'Altitude {msg.pose.position.z:.2f}m reached — '
+                f'takeoff complete, waypoint following active')
             self.flog.info(f'Takeoff complete at z={msg.pose.position.z:.2f}m')
             self.takeoff_complete = True
             
@@ -363,7 +370,11 @@ class ControlNode(Node):
         if self.sitl_mode and self.mavros_state is not None and self.mavros_state.connected:
             self.disable_throttle_failsafe()
         
-        # Wait for takeoff to complete before sending path setpoints
+        # Wait for takeoff to complete before sending path setpoints.
+        # IMPORTANT: Do NOT publish position setpoints during takeoff climb.
+        # ArduPilot's NAV_TAKEOFF has its own motor-spinup and climb logic.
+        # Sending SET_POSITION_TARGET during takeoff overrides NAV_TAKEOFF
+        # with position-hold, which cannot lift the drone off the ground.
         if not self.takeoff_complete:
             # Log why we're not following path yet (throttle to 1Hz)
             now = self.get_clock().now().nanoseconds
@@ -373,19 +384,6 @@ class ControlNode(Node):
                     f'takeoff_requested={self.takeoff_requested}'
                 )
                 self._last_wait_log = now
-            # CRITICAL: Publish a "hover at takeoff altitude" setpoint during
-            # takeoff climb.  ArduPilot GUIDED mode requires continuous
-            # setpoints or it will disarm the vehicle.
-            if self.takeoff_requested and self.current_pose is not None:
-                hover = PoseStamped()
-                hover.header.stamp = self.get_clock().now().to_msg()
-                hover.header.frame_id = 'map'
-                hover.pose.position.x = self.current_pose.pose.position.x
-                hover.pose.position.y = self.current_pose.pose.position.y
-                hover.pose.position.z = self.target_altitude
-                hover.pose.orientation.w = 1.0
-                self.setpoint_pub.publish(hover)
-                self.diag_setpoint_published_count += 1
             return
 
         if self.target_setpoint is None:
@@ -699,23 +697,10 @@ class ControlNode(Node):
             response = future.result()
             if response.success:
                 self.get_logger().info('Takeoff command accepted')
-                # Give it time to climb before declaring complete
-                self.takeoff_timer = self.create_timer(3.0, self._one_shot_takeoff_complete)
             else:
                 self.get_logger().warn('Takeoff command failed')
         except Exception as e:
             self.get_logger().error(f'Takeoff service call failed: {e}')
-    
-    def _one_shot_takeoff_complete(self):
-        """Fire once, then cancel the timer."""
-        self.mark_takeoff_complete()
-        if self.takeoff_timer is not None:
-            self.takeoff_timer.cancel()
-
-    def mark_takeoff_complete(self):
-        """Mark takeoff as complete after delay."""
-        self.takeoff_complete = True
-        self.get_logger().info('Takeoff complete - waypoint following active')
 
 
 def main(args=None):
