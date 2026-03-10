@@ -68,6 +68,8 @@ class ControlNode(Node):
         self.takeoff_complete = False
         self.takeoff_requested = False
         self.takeoff_timer = None
+        self._takeoff_request_walltime = None  # monotonic time when takeoff requested
+        self._takeoff_timeout_sec = 30.0      # fallback: mark complete after this + min alt
         
         # State variables
         self.current_path = None
@@ -282,6 +284,7 @@ class ControlNode(Node):
                 self.flog.warning('Disarm detected, resetting takeoff state')
                 self.takeoff_requested = False
                 self.takeoff_complete = False
+                self._takeoff_request_walltime = None
                 # Cancel any pending takeoff timer from the previous cycle
                 if self.takeoff_timer is not None:
                     self.takeoff_timer.cancel()
@@ -328,18 +331,29 @@ class ControlNode(Node):
         """
         self.current_pose = msg
         
-        # Robust takeoff detection: If we are at target altitude, assume takeoff complete
-        # This handles cases where the service callback might have been missed
+        # Robust takeoff detection: altitude OR time-based fallback.
+        # On slow machines the drone may plateau below the ideal target
+        # (e.g. z=1.66 for a 2.0m target), so we use:
+        #   Primary:  z >= 75% of target  (e.g. 1.5 m)
+        #   Fallback: 30 s since takeoff request AND z > 1.0 m
         if not self.takeoff_complete and \
            self.mavros_state is not None and \
            self.mavros_state.armed and \
-           self.mavros_state.mode == 'GUIDED' and \
-           msg.pose.position.z >= (self.target_altitude * 0.9):
-            self.get_logger().info(
-                f'Altitude {msg.pose.position.z:.2f}m reached — '
-                f'takeoff complete, waypoint following active')
-            self.flog.info(f'Takeoff complete at z={msg.pose.position.z:.2f}m')
-            self.takeoff_complete = True
+           self.mavros_state.mode == 'GUIDED':
+            z = msg.pose.position.z
+            alt_ok = z >= (self.target_altitude * 0.75)
+            timeout_ok = False
+            if self._takeoff_request_walltime is not None:
+                import time as _time
+                elapsed = _time.monotonic() - self._takeoff_request_walltime
+                timeout_ok = elapsed >= self._takeoff_timeout_sec and z > 1.0
+            if alt_ok or timeout_ok:
+                reason = 'altitude' if alt_ok else f'timeout ({elapsed:.0f}s, z={z:.2f}m)'
+                self.get_logger().info(
+                    f'Takeoff complete ({reason}) at z={z:.2f}m — '
+                    f'waypoint following active')
+                self.flog.info(f'Takeoff complete ({reason}) at z={z:.2f}m')
+                self.takeoff_complete = True
             
         # Check if current waypoint is reached
         if self.current_path is not None and self.target_setpoint is not None:
@@ -685,6 +699,8 @@ class ControlNode(Node):
         
         future = self.takeoff_client.call_async(request)
         future.add_done_callback(self.takeoff_callback)
+        import time as _time
+        self._takeoff_request_walltime = _time.monotonic()
         self.get_logger().info(f'Takeoff requested to {self.target_altitude}m')
         return True
     
