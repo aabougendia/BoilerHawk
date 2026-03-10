@@ -1,0 +1,27 @@
+# Mission Manager configuration
+# ─────────────────────────────
+# Loaded by mission.launch.py → mission_manager_node
+
+mission_manager_node:
+  ros__parameters:
+
+    # ── FSM timing ──────────────────────────────────────────────────
+    fsm_tick_rate: 2.0          # Hz — how often the state machine evaluates
+    goal_publish_rate: 1.0      # Hz — goal re-publish rate to /mission/goal
+    health_check_rate: 0.5      # Hz — upstream node health monitoring
+
+    # ── Flight parameters ───────────────────────────────────────────
+    takeoff_altitude: 2.0       # metres — target takeoff altitude
+    waypoint_threshold: 0.5     # metres — distance to consider waypoint reached
+    frame_id: "map"             # TF frame for all goal poses
+
+    # ── Return-to-launch position (local frame) ────────────────────
+    rtl_x: 0.0
+    rtl_y: 0.0
+
+    # ── Health monitoring ───────────────────────────────────────────
+    health_timeout: 5.0         # seconds — silence before declaring node dead
+
+    # ── Default strategy (applied by /mission/load service) ────────
+    strategy_name: "waypoint_survey"
+    strategy_params: '{"min_x": 0, "min_y": 0, "max_x": 5, "max_y": 5, "spacing": 1.0}'
