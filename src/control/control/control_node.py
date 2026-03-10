@@ -4,6 +4,9 @@ Control Node for BoilerHawk.
 Receives paths from planning module and sends setpoint commands to ArduPilot via MAVROS.
 """
 
+import logging
+import math
+import os
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
@@ -12,7 +15,21 @@ from geometry_msgs.msg import PoseStamped, Point
 from std_msgs.msg import String
 from mavros_msgs.msg import State, OverrideRCIn
 from mavros_msgs.srv import CommandBool, SetMode
-import math
+
+
+def _setup_file_logger(node_name: str) -> logging.Logger:
+    log_dir = os.path.expanduser('~/BoilerHawk/BoilerHawk/logs')
+    os.makedirs(log_dir, exist_ok=True)
+    flog = logging.getLogger(f'bhawk.{node_name}')
+    flog.setLevel(logging.DEBUG)
+    if not flog.handlers:
+        fh = logging.FileHandler(
+            os.path.join(log_dir, f'{node_name}.log'), mode='w')
+        fh.setFormatter(logging.Formatter(
+            '%(asctime)s [%(levelname)s] %(message)s',
+            datefmt='%H:%M:%S'))
+        flog.addHandler(fh)
+    return flog
 
 
 class ControlNode(Node):
@@ -43,9 +60,16 @@ class ControlNode(Node):
         # Failsafe override tracking
         self.failsafe_disabled = False
         
+        # Arming readiness: wait for GPS/EKF convergence
+        self._mavros_connect_time = None  # wallclock when MAVROS first connected
+        self._arm_delay_sec = 60.0       # seconds to wait after connect
+        
         # Takeoff state tracking
         self.takeoff_complete = False
         self.takeoff_requested = False
+        self.takeoff_timer = None
+        self._takeoff_request_walltime = None  # monotonic time when takeoff requested
+        self._takeoff_timeout_sec = 30.0      # fallback: mark complete after this + min alt
         
         # State variables
         self.current_path = None
@@ -58,6 +82,8 @@ class ControlNode(Node):
         self.diag_path_received_count = 0
         self.diag_setpoint_published_count = 0
         self.diag_last_path_time = None
+        self._last_path_fingerprint = None  # (count, first_xy, last_xy)
+        self._path_complete_logged = False
         
         # QoS profile for MAVROS compatibility
         qos_profile = QoSProfile(
@@ -126,8 +152,16 @@ class ControlNode(Node):
         # Timer for status monitoring
         self.status_timer = self.create_timer(1.0, self.status_callback)
         
-        # Timer for detailed diagnostics (every 5 seconds)
-        self.diag_timer = self.create_timer(5.0, self.diagnostics_callback)
+        # Timer for detailed diagnostics (every 30 seconds)
+        self.diag_timer = self.create_timer(30.0, self.diagnostics_callback)
+        
+        # File logger
+        self.flog = _setup_file_logger('control')
+        self.flog.info('=== Control node started ===')
+        self.flog.info(f'waypoint_threshold={self.waypoint_threshold}, '
+                       f'setpoint_rate={setpoint_rate}, '
+                       f'auto_arm={self.auto_arm}, '
+                       f'target_alt={self.target_altitude}')
         
         self.get_logger().info('Control node initialized')
         self.get_logger().info(f'Waypoint threshold: {self.waypoint_threshold}m')
@@ -164,15 +198,55 @@ class ControlNode(Node):
             self.get_logger().warn('Received empty path')
             return
         
+        # Build a fingerprint to detect genuinely new paths
+        first = msg.poses[0].pose.position
+        last = msg.poses[-1].pose.position
+        fp = (len(msg.poses),
+              round(first.x, 2), round(first.y, 2),
+              round(last.x, 2), round(last.y, 2))
+        path_changed = (fp != self._last_path_fingerprint)
+        self._last_path_fingerprint = fp
+        
         self.current_path = msg
-        self.current_waypoint_idx = 0
         self.diag_path_received_count += 1
         self.diag_last_path_time = self.get_clock().now()
         
-        self.get_logger().info(f'Received new path with {len(msg.poses)} waypoints')
+        # Find the closest waypoint, then skip forward past all waypoints
+        # that are already within the reached threshold so the drone never
+        # targets an already-passed waypoint.
+        best_idx = 0
+        if self.current_pose is not None:
+            cx = self.current_pose.pose.position.x
+            cy = self.current_pose.pose.position.y
+            # 1. Find closest waypoint by 2-D distance
+            min_dist = float('inf')
+            for i, pose_st in enumerate(msg.poses):
+                wp = pose_st.pose.position
+                d = math.sqrt((wp.x - cx)**2 + (wp.y - cy)**2)
+                if d < min_dist:
+                    min_dist = d
+                    best_idx = i
+            # 2. Advance past waypoints already within the reached threshold
+            while best_idx < len(msg.poses) - 1:
+                wp = msg.poses[best_idx].pose.position
+                d = math.sqrt((wp.x - cx)**2 + (wp.y - cy)**2)
+                if d < self.waypoint_threshold:
+                    best_idx += 1
+                else:
+                    break
+        self.current_waypoint_idx = best_idx
+        
+        if path_changed:
+            self._path_complete_logged = False
+            self.get_logger().info(f'Received new path with {len(msg.poses)} waypoints')
+            self.flog.info(
+                f'New path: {len(msg.poses)} wps, '
+                f'start=({first.x:.1f},{first.y:.1f}), '
+                f'end=({last.x:.1f},{last.y:.1f}), '
+                f'idx={best_idx}')
         
         # Update target setpoint to first waypoint
-        self.update_target_waypoint()
+        self.update_target_waypoint(log=path_changed)
     
     def state_callback(self, msg: State):
         """
@@ -188,13 +262,36 @@ class ControlNode(Node):
         if prev_state is None or prev_state.connected != msg.connected:
             if msg.connected:
                 self.get_logger().info('Connected to flight controller')
+                self.flog.info('MAVROS connected')
+                if self._mavros_connect_time is None:
+                    import time as _time
+                    self._mavros_connect_time = _time.monotonic()
+                    self.get_logger().info(
+                        f'Will wait {self._arm_delay_sec:.0f}s for GPS/EKF before arming')
+                    self.flog.info(
+                        f'Arming delay: {self._arm_delay_sec:.0f}s from now')
                 # Disable throttle failsafe when connected (for SITL)
                 self.disable_throttle_failsafe()
             else:
                 self.get_logger().warn('Disconnected from flight controller')
+                self.flog.warning('MAVROS disconnected')
         
-        # Request takeoff when armed and in GUIDED mode
-        if msg.armed and msg.mode == 'GUIDED' and not self.takeoff_requested:
+        # Detect disarm → reset takeoff state so we re-takeoff on next arm
+        if prev_state is not None and prev_state.armed and not msg.armed:
+            if self.takeoff_requested:
+                self.get_logger().warn(
+                    'Drone disarmed — resetting takeoff state for re-takeoff')
+                self.flog.warning('Disarm detected, resetting takeoff state')
+                self.takeoff_requested = False
+                self.takeoff_complete = False
+                self._takeoff_request_walltime = None
+                # Cancel any pending takeoff timer from the previous cycle
+                if self.takeoff_timer is not None:
+                    self.takeoff_timer.cancel()
+                    self.takeoff_timer = None
+        
+        # Request takeoff when armed and in GUIDED mode (only if auto_arm is on)
+        if self.auto_arm and msg.armed and msg.mode == 'GUIDED' and not self.takeoff_requested:
             self.get_logger().info('Armed in GUIDED mode - requesting takeoff')
             if self.request_takeoff():
                 self.takeoff_requested = True
@@ -203,9 +300,23 @@ class ControlNode(Node):
         if prev_state is None or prev_state.mode != msg.mode:
             self.get_logger().info(f'Flight mode: {msg.mode}')
         
-        # Handle auto mode switching
+        # Handle auto mode switching (always, even during delay)
         if self.auto_mode_switch and msg.connected and msg.mode != 'GUIDED':
             self.request_guided_mode()
+        
+        # Don't attempt arming until GPS/EKF have had time to converge
+        import time as _time
+        if self._mavros_connect_time is not None:
+            elapsed = _time.monotonic() - self._mavros_connect_time
+            if elapsed < self._arm_delay_sec:
+                # Throttled log (every 10s)
+                if not hasattr(self, '_last_delay_log') or \
+                   _time.monotonic() - self._last_delay_log > 10:
+                    remaining = self._arm_delay_sec - elapsed
+                    self.get_logger().info(
+                        f'Waiting for GPS/EKF: {remaining:.0f}s remaining')
+                    self._last_delay_log = _time.monotonic()
+                return
         
         # Handle auto arming
         if self.auto_arm and msg.connected and not msg.armed and msg.mode == 'GUIDED':
@@ -220,15 +331,29 @@ class ControlNode(Node):
         """
         self.current_pose = msg
         
-        # Robust takeoff detection: If we are at target altitude, assume takeoff complete
-        # This handles cases where the service callback might have been missed
+        # Robust takeoff detection: altitude OR time-based fallback.
+        # On slow machines the drone may plateau below the ideal target
+        # (e.g. z=1.66 for a 2.0m target), so we use:
+        #   Primary:  z >= 75% of target  (e.g. 1.5 m)
+        #   Fallback: 30 s since takeoff request AND z > 1.0 m
         if not self.takeoff_complete and \
            self.mavros_state is not None and \
            self.mavros_state.armed and \
-           self.mavros_state.mode == 'GUIDED' and \
-           msg.pose.position.z >= (self.target_altitude * 0.9):
-            self.get_logger().info(f'Altitude {msg.pose.position.z:.2f}m reached - marking takeoff complete')
-            self.takeoff_complete = True
+           self.mavros_state.mode == 'GUIDED':
+            z = msg.pose.position.z
+            alt_ok = z >= (self.target_altitude * 0.75)
+            timeout_ok = False
+            if self._takeoff_request_walltime is not None:
+                import time as _time
+                elapsed = _time.monotonic() - self._takeoff_request_walltime
+                timeout_ok = elapsed >= self._takeoff_timeout_sec and z > 1.0
+            if alt_ok or timeout_ok:
+                reason = 'altitude' if alt_ok else f'timeout ({elapsed:.0f}s, z={z:.2f}m)'
+                self.get_logger().info(
+                    f'Takeoff complete ({reason}) at z={z:.2f}m — '
+                    f'waypoint following active')
+                self.flog.info(f'Takeoff complete ({reason}) at z={z:.2f}m')
+                self.takeoff_complete = True
             
         # Check if current waypoint is reached
         if self.current_path is not None and self.target_setpoint is not None:
@@ -237,13 +362,15 @@ class ControlNode(Node):
                 self.target_setpoint.pose.position
             )
             
-            # Debug logging
-            if self.current_waypoint_idx == 0 or distance < 1.0:
+            # Debug logging (throttled to 5 s)
+            now_ns = self.get_clock().now().nanoseconds
+            if not hasattr(self, '_last_dist_log') or (now_ns - self._last_dist_log) > 5_000_000_000:
                 self.get_logger().info(
                     f'Dist: {distance:.2f}m | '
                     f'Pos: ({self.current_pose.pose.position.x:.2f}, {self.current_pose.pose.position.y:.2f}) | '
                     f'Tgt: ({self.target_setpoint.pose.position.x:.2f}, {self.target_setpoint.pose.position.y:.2f})'
                 )
+                self._last_dist_log = now_ns
             
             if distance < self.waypoint_threshold:
                 self.advance_waypoint()
@@ -257,9 +384,13 @@ class ControlNode(Node):
         if self.sitl_mode and self.mavros_state is not None and self.mavros_state.connected:
             self.disable_throttle_failsafe()
         
-        # Wait for takeoff to complete before sending setpoints
+        # Wait for takeoff to complete before sending path setpoints.
+        # IMPORTANT: Do NOT publish position setpoints during takeoff climb.
+        # ArduPilot's NAV_TAKEOFF has its own motor-spinup and climb logic.
+        # Sending SET_POSITION_TARGET during takeoff overrides NAV_TAKEOFF
+        # with position-hold, which cannot lift the drone off the ground.
         if not self.takeoff_complete:
-            # Log why we're not publishing (throttle to 1Hz)
+            # Log why we're not following path yet (throttle to 1Hz)
             now = self.get_clock().now().nanoseconds
             if not hasattr(self, '_last_wait_log') or (now - self._last_wait_log) > 1e9:
                 self.get_logger().warn(
@@ -419,7 +550,7 @@ class ControlNode(Node):
         
         self.get_logger().info('=' * 60)
     
-    def update_target_waypoint(self):
+    def update_target_waypoint(self, log=True):
         """
         Update the target setpoint to the current waypoint in the path.
         """
@@ -429,21 +560,34 @@ class ControlNode(Node):
         
         waypoint = self.current_path.poses[self.current_waypoint_idx]
         
-        # Create setpoint with target altitude
+        # Compute yaw so the drone faces toward the target waypoint
+        yaw = 0.0
+        if self.current_pose is not None:
+            dx = waypoint.pose.position.x - self.current_pose.pose.position.x
+            dy = waypoint.pose.position.y - self.current_pose.pose.position.y
+            if math.sqrt(dx*dx + dy*dy) > 0.1:  # avoid jitter when very close
+                yaw = math.atan2(dy, dx)
+        
+        # Create setpoint with target altitude and computed yaw
         self.target_setpoint = PoseStamped()
         self.target_setpoint.header.stamp = self.get_clock().now().to_msg()
         self.target_setpoint.header.frame_id = 'map'
         self.target_setpoint.pose.position.x = waypoint.pose.position.x
         self.target_setpoint.pose.position.y = waypoint.pose.position.y
-        self.target_setpoint.pose.position.z = self.target_altitude  # Use configured altitude
-        self.target_setpoint.pose.orientation = waypoint.pose.orientation
+        self.target_setpoint.pose.position.z = self.target_altitude
+        # Quaternion from yaw (roll=0, pitch=0)
+        self.target_setpoint.pose.orientation.x = 0.0
+        self.target_setpoint.pose.orientation.y = 0.0
+        self.target_setpoint.pose.orientation.z = math.sin(yaw / 2.0)
+        self.target_setpoint.pose.orientation.w = math.cos(yaw / 2.0)
         
-        self.get_logger().info(
-            f'Target waypoint {self.current_waypoint_idx + 1}: '
-            f'({self.target_setpoint.pose.position.x:.2f}, '
-            f'{self.target_setpoint.pose.position.y:.2f}, '
-            f'{self.target_setpoint.pose.position.z:.2f})'
-        )
+        if log:
+            self.get_logger().info(
+                f'Target waypoint {self.current_waypoint_idx + 1}: '
+                f'({self.target_setpoint.pose.position.x:.2f}, '
+                f'{self.target_setpoint.pose.position.y:.2f}, '
+                f'{self.target_setpoint.pose.position.z:.2f})'
+            )
     
     def advance_waypoint(self):
         """
@@ -455,12 +599,14 @@ class ControlNode(Node):
         self.current_waypoint_idx += 1
         
         if self.current_waypoint_idx >= len(self.current_path.poses):
-            self.get_logger().info('Path complete! Reached final waypoint.')
+            if not self._path_complete_logged:
+                self.get_logger().info('Path complete! Reached final waypoint.')
+                self._path_complete_logged = True
             # Hold at final position
             return
         
         self.get_logger().info(f'Waypoint reached! Advancing to waypoint {self.current_waypoint_idx + 1}')
-        self.update_target_waypoint()
+        self.update_target_waypoint(log=True)
     
     def calculate_distance(self, point1: Point, point2: Point) -> float:
         """
@@ -553,6 +699,8 @@ class ControlNode(Node):
         
         future = self.takeoff_client.call_async(request)
         future.add_done_callback(self.takeoff_callback)
+        import time as _time
+        self._takeoff_request_walltime = _time.monotonic()
         self.get_logger().info(f'Takeoff requested to {self.target_altitude}m')
         return True
     
@@ -565,17 +713,10 @@ class ControlNode(Node):
             response = future.result()
             if response.success:
                 self.get_logger().info('Takeoff command accepted')
-                # Give it time to climb before declaring complete
-                self.takeoff_timer = self.create_timer(3.0, self.mark_takeoff_complete, one_shot=True)
             else:
                 self.get_logger().warn('Takeoff command failed')
         except Exception as e:
             self.get_logger().error(f'Takeoff service call failed: {e}')
-    
-    def mark_takeoff_complete(self):
-        """Mark takeoff as complete after delay."""
-        self.takeoff_complete = True
-        self.get_logger().info('Takeoff complete - waypoint following active')
 
 
 def main(args=None):

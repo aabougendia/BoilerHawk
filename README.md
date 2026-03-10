@@ -1,0 +1,736 @@
+# BoilerHawk
+
+**Autonomous drone simulation with real-time obstacle avoidance.**
+
+BoilerHawk is a fully integrated ROS 2 robotics stack that flies an Iris quadcopter through a Gazebo environment, detects obstacles with a depth camera, plans paths around them using A\*, and follows those paths via ArduPilot SITL. Everything launches with a single command.
+
+<br>
+
+## Table of Contents
+
+- [Architecture](#architecture)
+- [Quick Start](#quick-start)
+- [Prerequisites](#prerequisites)
+- [Installation](#installation)
+- [Packages](#packages)
+  - [sim\_models](#sim_models)
+  - [sensors\_interface](#sensors_interface)
+  - [perception](#perception)
+  - [planning](#planning)
+  - [control](#control)
+- [ROS 2 Topic Map](#ros-2-topic-map)
+- [Configuration](#configuration)
+- [Testing](#testing)
+- [Troubleshooting](#troubleshooting)
+- [Project Structure](#project-structure)
+
+<br>
+
+---
+
+## Architecture
+
+```
+┌──────────────┐    JSON     ┌──────────────┐   MAVLink    ┌──────────────┐
+│   Gazebo     │◄───────────►│  ArduPilot   │◄────────────►│   MAVROS     │
+│  Harmonic    │  (physics)  │    SITL      │  (UDP 14550) │              │
+└──────┬───────┘             └──────────────┘              └──────┬───────┘
+       │                                                          │
+       │ Gazebo topics                                 /mavros/*  │
+       │ (depth_camera/*)                                         │
+       ▼                                                          ▼
+┌──────────────┐  ros_gz_bridge   ┌──────────────┐        ┌──────────────┐
+│  Depth Cam   │─────────────────►│  Perception  │        │   Control    │
+│  320×240     │  PointCloud2     │              │        │              │
+│  @ 10 Hz     │                  │ Point cloud  │        │ MAVROS I/F   │
+└──────────────┘                  │ → Occupancy  │        │ Auto-arm     │
+                                  │   grid       │        │ Yaw-toward-  │
+                                  │ + decay +    │        │   waypoint   │
+                                  │   inflation  │
+                                  └──────┬───────┘        └──────▲───────┘
+                                         │                       │
+                                /occupancy_grid           /local_path
+                                         │                       │
+                                         ▼                       │
+                                  ┌──────────────┐               │
+                                  │   Planning   │───────────────┘
+                                  │              │
+                                  │ Straight-line│
+                                  │ global +     │
+                                  │ A* local     │
+                                  │ replanning   │
+                                  └──────────────┘
+```
+
+**Data flow in one sentence:** The depth camera produces a point cloud → perception converts it to an inflated occupancy grid → planning generates waypoints using A\* around obstacles → control sends position setpoints to ArduPilot through MAVROS.
+
+<br>
+
+---
+
+## Quick Start
+
+```bash
+# 1. Build the workspace
+cd ~/BoilerHawk/BoilerHawk
+colcon build --symlink-install
+source install/setup.bash
+
+# 2. Launch everything (Gazebo + ArduPilot + MAVROS + all nodes + RViz)
+./launch_sim.sh
+```
+
+**What happens after launch (be patient — the full startup takes ~2 minutes):**
+
+| Time | What you'll see |
+|------|-----------------|
+| 0 – 5 s | Gazebo window opens with the maze world; ROS nodes start |
+| ~2 s | ArduPilot SITL begins booting (MAVProxy console may flash briefly) |
+| ~5 s | RViz opens |
+| ~25 s | MAVROS connects — you'll see `Connected to flight controller` in the terminal |
+| 25 – 85 s | **GPS/EKF convergence wait.** The control node intentionally waits **60 seconds** after MAVROS connects before attempting to arm. You will see periodic `Waiting for GPS/EKF: Xs remaining` log messages. **This is normal — do not restart.** ArduPilot's EKF needs time to converge on a stable position estimate; arming too early causes immediate disarm. |
+| ~85 s | The drone switches to GUIDED mode, arms, and takes off to 2 m altitude |
+| ~90 s+ | Autonomous navigation begins — the drone flies through the zigzag maze from (0, 0) → (3, 15) |
+
+> **If the drone arms then immediately disarms and you do NOT see the "Waiting for GPS/EKF" messages**, your `control_params.yaml` may not have `auto_arm: true`. See [Troubleshooting](#troubleshooting).
+
+<br>
+
+---
+
+## Prerequisites
+
+| Component | Version | Purpose |
+|-----------|---------|---------|
+| **Ubuntu** | 24.04 (or WSL2) | Host OS |
+| **ROS 2** | Jazzy Jalisco | Middleware |
+| **Gazebo** | Harmonic | Physics simulation |
+| **ArduPilot** | Latest `master` | Flight controller (SITL) |
+| **MAVROS** | ROS 2 Jazzy build | MAVLink ↔ ROS 2 bridge |
+| **Python** | 3.12+ | All node source code |
+
+<br>
+
+---
+
+## Installation
+
+> **Important:** Follow every step in order. Skipping a step (especially environment variables or the ArduPilot WAF build) will cause silent failures at runtime — typically the drone arms then immediately disarms.
+
+### 1. ROS 2 Packages
+
+Install required ROS 2 packages that are not part of the default desktop install:
+
+```bash
+sudo apt update
+sudo apt install -y \
+  ros-jazzy-mavros ros-jazzy-mavros-extras \
+  ros-jazzy-ros-gzharmonic \
+  ros-jazzy-tf2-ros ros-jazzy-cv-bridge \
+  python3-sensor-msgs-py
+```
+
+Then install MAVROS's geographic dependency data (required for GPS):
+
+```bash
+sudo /opt/ros/jazzy/lib/mavros/install_geographiclib_datasets.sh
+```
+
+### 2. ArduPilot SITL
+
+```bash
+git clone --recurse-submodules https://github.com/ArduPilot/ardupilot.git ~/ardupilot
+cd ~/ardupilot
+Tools/environment_install/install-prereqs-ubuntu.sh -y
+```
+
+**Reload your environment** (this adds ArduPilot tools to your PATH):
+
+```bash
+source ~/.profile
+```
+
+**Build the SITL binary** (this is required — `sim_vehicle.py` will fail without it):
+
+```bash
+cd ~/ardupilot
+./waf configure --board sitl
+./waf copter
+```
+
+### 3. ArduPilot Gazebo Plugin
+
+```bash
+export GZ_VERSION=harmonic
+git clone https://github.com/ArduPilot/ardupilot_gazebo.git ~/ardupilot_gazebo
+cd ~/ardupilot_gazebo && mkdir build && cd build
+cmake .. -DCMAKE_BUILD_TYPE=RelWithDebInfo && make -j4
+```
+
+### 4. Environment Variables
+
+Add **all** of the following to your `~/.bashrc`:
+
+```bash
+# ArduPilot Gazebo Harmonic integration
+export GZ_VERSION=harmonic
+export GZ_SIM_SYSTEM_PLUGIN_PATH=$HOME/ardupilot_gazebo/build:${GZ_SIM_SYSTEM_PLUGIN_PATH}
+export GZ_SIM_RESOURCE_PATH=$HOME/ardupilot_gazebo/models:$HOME/ardupilot_gazebo/worlds:${GZ_SIM_RESOURCE_PATH}
+export GZ_SIM_RESOURCE_PATH=$HOME/BoilerHawk/BoilerHawk/src/sim_models/models:${GZ_SIM_RESOURCE_PATH}
+```
+
+Then **restart your terminal** (or run `source ~/.bashrc`).
+
+**Verify** your environment is set correctly:
+
+```bash
+# Should print paths containing ardupilot_gazebo and BoilerHawk
+echo $GZ_SIM_RESOURCE_PATH
+echo $GZ_SIM_SYSTEM_PLUGIN_PATH
+
+# sim_vehicle.py should be on PATH
+which sim_vehicle.py
+```
+
+### 5. Clone & Build BoilerHawk
+
+```bash
+git clone https://github.com/aabougendia/BoilerHawk.git ~/BoilerHawk
+cd ~/BoilerHawk/BoilerHawk
+colcon build --symlink-install
+source install/setup.bash
+```
+
+> **Tip:** Add `source ~/BoilerHawk/BoilerHawk/install/setup.bash` to your `~/.bashrc` so you don't have to run it every time you open a new terminal.
+
+<br>
+
+---
+
+## Packages
+
+### sim\_models
+
+**Type:** `ament_cmake` — asset-only package (no compiled code)
+
+Contains all Gazebo simulation assets: SDF world files, drone model, launch files, and RViz configs.
+
+| Directory | Contents |
+|-----------|----------|
+| `worlds/` | SDF world files — `outdoor_world_ardupilot.sdf` is the primary world |
+| `models/` | Local Gazebo models (Iris drone, depth camera, ground planes) |
+| `launch/` | ROS 2 launch files — `stage123_control.launch.py` is the master launcher |
+| `rviz/` | RViz configuration files |
+
+#### World: `outdoor_world_ardupilot.sdf`
+
+A maze corridor environment with:
+- Ground plane (flat green)
+- Three 6 m × 0.5 m × 3 m walls creating a zigzag corridor:
+  - **Wall 1 (red)** at y = 4: spans x = [−5, 1], gap on the right
+  - **Wall 2 (blue)** at y = 8: spans x = [−1, 5], gap on the left
+  - **Wall 3 (green)** at y = 12: spans x = [−5, 1], gap on the right
+- Iris quadcopter spawned at origin with depth camera
+- Physics: 1 ms step size, shadows disabled for performance
+- Spherical coordinates set for ArduPilot GPS (Canberra, Australia default)
+
+#### Model: `iris_with_depth_cam`
+
+An `iris_with_standoffs` quadcopter extended with:
+- **RGBD depth camera** — 320×240 @ 10 Hz, 60° FOV, 0.1–10 m range, mounted forward-facing with 11° downward tilt
+- **GPS sensor** — 10 Hz with Gaussian noise
+- **Magnetometer** — 50 Hz
+- **Air pressure sensor** — 50 Hz
+- **Lift-drag plugins** for all four rotors (realistic aerodynamics)
+- **ArduPilot plugin** for JSON-based SITL communication
+
+#### Launch: `stage123_control.launch.py`
+
+The master launch file that starts the entire system in sequence:
+
+| Delay | Component | Notes |
+|-------|-----------|-------|
+| 0 s | Gazebo Harmonic | Loads `outdoor_world_ardupilot.sdf` with `-r` (run immediately) |
+| 0 s | ros\_gz\_bridge (×4) | Bridges depth camera image, depth, points, and camera\_info topics |
+| 0 s | Static TF | `world` → `odom` identity transform |
+| 0 s | MAVROS TF Broadcaster | `odom` → `base_link` dynamic TF from MAVROS pose |
+| 0 s | Perception, Planning, Control | Start immediately (wait internally for data) |
+| 2 s | ArduPilot SITL | `sim_vehicle.py -v ArduCopter -f gazebo-iris --model JSON` |
+| 5 s | RViz | Visualization with `drone_outdoor.rviz` config |
+| 25 s | MAVROS | Connects to SITL via UDP (waits for heartbeat) |
+
+---
+
+### sensors\_interface
+
+**Type:** `ament_python`
+
+Provides sensor utility nodes and the TF bridge between MAVROS and the rest of the system.
+
+#### Nodes
+
+| Executable | Source | Description |
+|------------|--------|-------------|
+| `mavros_tf_broadcaster` | `mavros_tf_broadcaster.py` | **Critical node.** Subscribes to `/mavros/local_position/pose`, broadcasts the `odom` → `base_link` dynamic TF, and republishes the pose on `/current_pose` for the planning node. |
+| `depth_camera_node` | `camera_listener.py` | Development/debug tool. Subscribes to RGB and depth image topics and displays them with OpenCV. Not used in autonomous flight. |
+| `drone_teleop_key` | `drone_teleop_key.py` | Keyboard teleoperation for manual drone control in Gazebo (WASD + TG + QE). Not used in autonomous flight. |
+
+---
+
+### perception
+
+**Type:** `ament_python`
+
+Converts raw depth camera point clouds into an occupancy grid for the planner.
+
+#### Node: `perception_node`
+
+**Subscriptions:**
+| Topic | Type | Description |
+|-------|------|-------------|
+| `/depth_camera/points` | `PointCloud2` | Raw point cloud from the depth camera via ros\_gz\_bridge |
+| `/mavros/local_position/pose` | `PoseStamped` | Drone position and yaw for coordinate transforms |
+
+**Publications:**
+| Topic | Type | Description |
+|-------|------|-------------|
+| `/occupancy_grid` | `OccupancyGrid` | Fixed world-frame 2D grid, published every point cloud frame |
+
+**Parameters:**
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `resolution` | `0.2` | Grid cell size in meters |
+| `max_range` | `5.0` | Points beyond this distance are discarded |
+| `inflate_radius` | `0.6` | Obstacles are expanded by this radius for safety margin |
+| `grid_frame` | `map` | TF frame ID for the published grid |
+| `grid_origin_x` | `-5.0` | World-frame X origin of the fixed grid |
+| `grid_origin_y` | `-2.0` | World-frame Y origin of the fixed grid |
+| `grid_width_m` | `10.0` | Grid width in meters |
+| `grid_height_m` | `20.0` | Grid height in meters (covers the full maze) |
+| `cam_pitch` | `0.2` | Camera downward tilt in radians (≈ 11°) |
+| `cam_z_offset` | `0.05` | Camera mount height offset |
+| `min_obstacle_height` | `0.5` | Points below this world-Z are filtered as ground |
+| `min_hits` | `5` | Frame-detection count required to mark a cell occupied |
+| `hit_increment` | `3` | Score added per frame to each newly-detected cell |
+| `hit_decay` | `1` | Score subtracted from every cell every frame |
+
+**Processing pipeline:**
+1. Read `PointCloud2` (structured, named fields) and filter out inf/NaN values
+2. Auto-detect frame convention (sensor-link vs optical) on the first cloud
+3. Filter by range (0.3 m to `max_range`)
+4. Undo fixed camera pitch to get body-frame coordinates
+5. Apply **full quaternion rotation** (from MAVROS pose) to transform body → world frame — this accounts for drone roll and pitch during flight, critical because forward-flight tilt would otherwise bias ground points upward
+6. **Height filter:** keep only points with `min_obstacle_height < world_z < 4.0 m`
+7. **Decay** only **unconfirmed** cells (hit count below `min_hits`) by `hit_decay` every frame — once a cell reaches `min_hits` it becomes a **permanent obstacle** and is never decayed, ensuring confirmed walls are never forgotten even when outside the camera's field of view
+8. **Per-frame binary rasterization:** each cell gains at most `+hit_increment` per frame regardless of how many points fall in it (prevents a single noisy frame from overwhelming the threshold)
+9. Mark cells with `≥ min_hits` as occupied, then **inflate** by `inflate_radius` (iterative 8-connected dilation)
+10. Publish as `OccupancyGrid`
+
+---
+
+### planning
+
+**Type:** `ament_python`
+
+Path planning using A\* on the live occupancy grid with a two-tier strategy:
+- **Global path:** Straight line from start to goal (because A\* can't run on a 10 m local grid when the goal is 14 m away)
+- **Local replanning:** When an obstacle is detected ahead, A\* runs on the local grid to compute a detour, then stitches the result back to the remaining global path
+
+#### Node: `planning_node`
+
+**Subscriptions:**
+| Topic | Type | Description |
+|-------|------|-------------|
+| `/occupancy_grid` | `OccupancyGrid` | From perception |
+| `/current_pose` | `PoseStamped` | From MAVROS TF broadcaster |
+
+**Publications:**
+| Topic | Type | Description |
+|-------|------|-------------|
+| `/global_path` | `Path` | Full start → goal path |
+| `/local_path` | `Path` | Upcoming waypoint window (sent to control) |
+| `/path_markers` | `MarkerArray` | RViz visualization (blue = global, red = local) |
+
+**Parameters:**
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `start_x`, `start_y` | `0.0, 0.0` | Start position in meters |
+| `goal_x`, `goal_y` | `3.0, 15.0` | Goal position in meters (after the last maze wall) |
+| `occupancy_threshold` | `50` | Grid values ≥ this are treated as occupied |
+| `lookahead_distance` | `30` | Waypoints ahead to include in local path |
+| `planning_frequency` | `2.0` | How often (Hz) to check for obstacles and update local path |
+
+**Replanning logic:**
+1. Every 0.5 s, scan waypoints ahead of the drone (within lookahead window) for obstacles
+2. Only check waypoints that fall inside the current occupancy grid (far-away points are skipped)
+3. If an obstacle is found and the 5 s cooldown has elapsed:
+   - Walk the path forward to find the first **clear** waypoint past the obstacle
+   - Run A\* from the drone's current position to that clear waypoint
+   - If A\* start or goal lands inside an inflated obstacle cell, BFS-search for the nearest free cell
+   - Stitch: `[A* detour] + [remaining global waypoints]`
+4. If A\* fails (e.g., completely surrounded), keep the current path rather than replacing it with a line through the obstacle
+
+#### Library: `path_planner.py`
+
+The `PathPlanner` class implements:
+- **A\* search** on an 8-connected grid with Euclidean heuristic. Diagonal moves cost √2, cardinal moves cost 1.
+- **`_nearest_free_cell()`** — BFS fallback when start or goal is in an occupied cell (searches up to 15 cells out)
+- **`world_to_grid()` / `grid_to_world()`** — Coordinate conversion between world meters and grid (row, col). Uses `round()` for sub-cell accuracy.
+
+---
+
+### control
+
+**Type:** `ament_python`
+
+The MAVROS interface — receives paths from planning and sends position setpoints to ArduPilot.
+
+#### Node: `control_node`
+
+**Subscriptions:**
+| Topic | Type | Description |
+|-------|------|-------------|
+| `/local_path` | `Path` | Waypoints from planning |
+| `/mavros/state` | `State` | Armed, mode, connected status |
+| `/mavros/local_position/pose` | `PoseStamped` | Current drone position |
+
+**Publications:**
+| Topic | Type | Description |
+|-------|------|-------------|
+| `/mavros/setpoint_position/local` | `PoseStamped` | Position commands at 20 Hz |
+| `/mavros/rc/override` | `OverrideRCIn` | Throttle failsafe override for SITL |
+| `/control/status` | `String` | Human-readable status |
+
+**Parameters** (from `config/control_params.yaml`):
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `waypoint_threshold` | `0.5` | Distance (m) to consider a waypoint reached |
+| `setpoint_rate` | `20.0` | Setpoint publishing frequency (Hz) |
+| `auto_arm` | `true` | Automatically arm when MAVROS connects |
+| `auto_mode_switch` | `true` | Automatically switch to GUIDED mode |
+| `target_altitude` | `2.0` | Fixed flight altitude (m) |
+
+**Key behaviors:**
+- **Auto-sequencing:** On MAVROS connection → wait 60 s for GPS/EKF convergence → switch to GUIDED → arm → takeoff → begin waypoint following. No manual intervention needed.
+- **60-second arming delay:** After MAVROS first connects, the node waits 60 s before the first arm attempt. This gives ArduPilot's GPS/EKF time to converge in SITL, preventing repeated arm → immediate-disarm cycles that would otherwise delay takeoff by several minutes.
+- **Hover setpoints during takeoff:** While the drone is climbing to `target_altitude`, the node continuously publishes position setpoints at the target altitude. This prevents ArduPilot from disarming due to lack of offboard commands during the takeoff phase.
+- **Disarm recovery:** If ArduPilot disarms unexpectedly (e.g., EKF variance spike), the node detects the armed → disarmed transition, resets takeoff state, and re-initiates the arm → takeoff sequence automatically.
+- **Yaw-toward-waypoint:** Computes `yaw = atan2(dy, dx)` from current position to the target waypoint and sets the orientation quaternion. This keeps the forward-facing depth camera pointed in the direction of travel.
+- **Smart path indexing:** On each new path, finds the closest waypoint then skips forward past any already-reached waypoints to prevent back-tracking.
+- **Throttle failsafe override:** Continuously publishes RC channel 3 = 1500 to prevent ArduPilot's low-throttle failsafe from triggering in SITL.
+- **Diagnostics:** Every 30 s, logs a full state summary (connection, mode, position, waypoint progress, issue detection).
+
+<br>
+
+---
+
+## ROS 2 Topic Map
+
+```
+Gazebo                          ROS 2                              Node
+──────                          ─────                              ────
+depth_camera/image         ──►  /depth_camera/image                (bridge)
+depth_camera/depth_image   ──►  /depth_camera/depth_image          (bridge)
+depth_camera/points        ──►  /depth_camera/points               (bridge)
+depth_camera/camera_info   ──►  /depth_camera/camera_info          (bridge)
+
+                                /mavros/local_position/pose    ──► perception, control, tf_broadcaster
+                                /mavros/state                  ──► control
+                                /mavros/setpoint_position/local ◄── control
+                                /mavros/rc/override            ◄── control
+                                /mavros/cmd/arming             ◄── control (service)
+                                /mavros/set_mode               ◄── control (service)
+                                /mavros/cmd/takeoff            ◄── control (service)
+
+                                /current_pose                  ──► planning         (from tf_broadcaster)
+                                /occupancy_grid                ──► planning         (from perception)
+                                /global_path                   ──► (RViz)           (from planning)
+                                /local_path                    ──► control          (from planning)
+                                /path_markers                  ──► (RViz)           (from planning)
+                                /control/status                ──► (monitoring)     (from control)
+```
+
+**TF Tree:**
+```
+world → odom → base_link
+ (static)  (dynamic, from mavros_tf_broadcaster)
+```
+
+<br>
+
+---
+
+## Configuration
+
+### Changing the Goal
+
+```bash
+./launch_sim.sh goal_x:=5.0 goal_y:=20.0
+```
+
+Or edit the defaults in `src/sim_models/launch/stage123_control.launch.py`.
+
+### Tuning Parameters
+
+| What | File | Key Parameter |
+|------|------|---------------|
+| Flight altitude | `src/control/config/control_params.yaml` | `target_altitude` |
+| Waypoint reach distance | `src/control/config/control_params.yaml` | `waypoint_threshold` |
+| Obstacle safety margin | Launch file (`stage123_control.launch.py`) | `inflate_radius` (0.6 m) |
+| Grid resolution | Launch file | `resolution` (0.2 m) |
+| Sensor range | Launch file | `max_range` (5.0 m) |
+| Ground filter height | Launch file | `min_obstacle_height` (0.5 m) |
+| Detection threshold | Launch file | `min_hits`, `hit_increment`, `hit_decay` |
+| Replan cooldown | `src/planning/planning/planning_node.py` | `5_000_000_000` ns (5 s) |
+| Camera resolution | `src/sim_models/models/iris_with_depth_cam/model.sdf` | `<width>`, `<height>` |
+
+### Adding Maze Walls
+
+Edit `src/sim_models/worlds/outdoor_world_ardupilot.sdf` and add a new `<model>` block. Walls use `<pose>X Y 1.5 0 0 0</pose>` (centered vertically at half-height):
+
+```xml
+<model name="my_wall">
+  <static>true</static>
+  <pose>X Y 1.5 0 0 0</pose>
+  <link name="wall_link">
+    <visual name="wall_visual">
+      <geometry><box><size>WIDTH 0.5 3.0</size></box></geometry>
+      <material>
+        <ambient>0.8 0.2 0.2 1</ambient>
+        <diffuse>0.9 0.2 0.2 1</diffuse>
+      </material>
+    </visual>
+    <collision name="wall_collision">
+      <geometry><box><size>WIDTH 0.5 3.0</size></box></geometry>
+    </collision>
+  </link>
+</model>
+```
+
+Ensure the grid in the launch file covers the new obstacle area (`grid_origin_*`, `grid_width_m`, `grid_height_m`). Then rebuild:
+
+```bash
+colcon build --packages-select sim_models
+```
+
+<br>
+
+---
+
+## Testing
+
+### Unit Tests
+
+```bash
+# Path planner tests (18 tests: A*, maze, narrow passage, coordinate conversion, etc.)
+colcon test --packages-select planning
+colcon test-result --verbose
+
+# Control utility tests (distance calc, waypoint threshold)
+colcon test --packages-select control
+
+# Linters (flake8, pep257)
+colcon test --packages-select perception sensors_interface
+```
+
+### Manual Flight Verification
+
+```bash
+# In a second terminal, monitor drone position:
+source install/setup.bash
+ros2 topic echo /mavros/local_position/pose --field pose.position
+
+# Check if obstacles are being detected:
+ros2 topic echo /occupancy_grid --field info  # grid metadata
+ros2 topic hz /occupancy_grid                 # should be ~10 Hz
+
+# Check the planned path:
+ros2 topic echo /local_path --field poses --once
+```
+
+<br>
+
+---
+
+## Troubleshooting
+
+### Drone arms then immediately disarms (never takes off)
+
+This is the most common issue for new setups. ArduPilot will refuse to stay armed if its EKF (Extended Kalman Filter) hasn't converged on a stable position estimate. Causes:
+
+1. **You're not waiting long enough.** The control node intentionally delays arming for 60 seconds after MAVROS connects. The full startup sequence takes **~90 seconds** from `./launch_sim.sh` to first arm attempt. Look for `Waiting for GPS/EKF: Xs remaining` in the terminal output.
+
+2. **GeographicLib datasets not installed.** MAVROS needs geographic reference data for GPS. If you skipped this step, MAVROS will connect but GPS will never converge:
+   ```bash
+   sudo /opt/ros/jazzy/lib/mavros/install_geographiclib_datasets.sh
+   ```
+
+3. **ArduPilot SITL not fully built.** If you cloned ArduPilot but didn't run the WAF build, `sim_vehicle.py` will either fail or produce a broken SITL instance:
+   ```bash
+   cd ~/ardupilot
+   ./waf configure --board sitl
+   ./waf copter
+   ```
+
+4. **Environment variables not loaded.** If `GZ_SIM_SYSTEM_PLUGIN_PATH` doesn't include the ArduPilot Gazebo plugin, Gazebo won't load the ArduPilot interface and SITL won't receive physics data. Verify:
+   ```bash
+   echo $GZ_SIM_SYSTEM_PLUGIN_PATH   # must contain ~/ardupilot_gazebo/build
+   echo $GZ_SIM_RESOURCE_PATH         # must contain the models directories
+   ```
+   If empty, re-add to `~/.bashrc` (see [Installation step 4](#4-environment-variables)) and restart your terminal.
+
+5. **Slow machine / low real-time factor.** ArduPilot expects physics updates at ≥ 400 Hz. If Gazebo's real-time factor drops too low (< 0.3), the EKF may never converge. Check the real-time factor in the Gazebo bottom bar. If it's low, try closing other applications or reducing camera resolution in the drone model SDF.
+
+### Gazebo opens but the drone model doesn't appear
+
+`GZ_SIM_RESOURCE_PATH` is missing the BoilerHawk models directory. The world file uses `model://iris_with_depth_cam`, which Gazebo resolves via this environment variable. Fix:
+
+```bash
+export GZ_SIM_RESOURCE_PATH=$HOME/BoilerHawk/BoilerHawk/src/sim_models/models:${GZ_SIM_RESOURCE_PATH}
+```
+
+### `sim_vehicle.py: command not found`
+
+ArduPilot's tools aren't on your PATH. Run:
+
+```bash
+source ~/.profile
+```
+
+Or add `~/ardupilot/Tools/autotest` to your PATH in `~/.bashrc`.
+
+### MAVROS never connects (no heartbeat)
+
+The launch file starts MAVROS 25 seconds after Gazebo to give SITL time to boot. If SITL is slow to start on your machine, MAVROS may time out. Check:
+
+```bash
+# In a second terminal:
+source install/setup.bash
+ros2 topic list | grep mavros
+```
+
+If no MAVROS topics appear after 60 s, try increasing the MAVROS delay in `stage123_control.launch.py` (change the `period=25.0` for `mavros_node` to 35 or 40).
+
+### `colcon build` fails
+
+Make sure you have ROS 2 Jazzy sourced before building:
+
+```bash
+source /opt/ros/jazzy/setup.bash
+cd ~/BoilerHawk/BoilerHawk
+colcon build --symlink-install
+```
+
+<br>
+
+---
+
+## Project Structure
+
+```
+BoilerHawk/
+├── launch_sim.sh                          # One-command launcher
+├── src/
+│   ├── sim_models/                        # [ament_cmake] Simulation assets
+│   │   ├── CMakeLists.txt
+│   │   ├── launch/
+│   │   │   └── stage123_control.launch.py # Master launch file
+│   │   ├── models/
+│   │   │   └── iris_with_depth_cam/       # Iris drone + RGBD camera + ArduPilot
+│   │   ├── worlds/
+│   │   │   └── outdoor_world_ardupilot.sdf
+│   │   └── rviz/
+│   │       └── drone_outdoor.rviz
+│   │
+│   ├── sensors_interface/                 # [ament_python] TF bridge & sensor utilities
+│   │   └── sensors_interface/
+│   │       ├── mavros_tf_broadcaster.py   # odom→base_link TF + /current_pose
+│   │       ├── camera_listener.py         # Debug: OpenCV depth/RGB viewer
+│   │       └── drone_teleop_key.py        # Debug: keyboard control
+│   │
+│   ├── perception/                        # [ament_python] Point cloud → occupancy grid
+│   │   └── perception/
+│   │       └── perception.py              # PerceptionNode (world-frame grid, decay, quaternion transform)
+│   │
+│   ├── planning/                          # [ament_python] A* path planning
+│   │   ├── planning/
+│   │   │   ├── planning_node.py           # PlanningNode (global/local paths)
+│   │   │   └── path_planner.py            # PathPlanner (A*, grid utils)
+│   │   ├── config/
+│   │   │   └── planning_params.yaml
+│   │   └── test/
+│   │       └── test_path_planner.py       # 18 unit tests
+│   │
+│   ├── control/                           # [ament_python] MAVROS waypoint follower
+│   │   ├── control/
+│   │   │   └── control_node.py            # ControlNode (arm, takeoff, setpoints, yaw)
+│   │   ├── config/
+│   │   │   └── control_params.yaml
+│   │   └── test/
+│   │       └── test_control.py
+│   │
+│   └── localization/                      # [placeholder] Future localization package
+│
+├── build/                                 # colcon build output (gitignored)
+├── install/                               # colcon install output (gitignored)
+├── log/                                   # colcon log output (gitignored)
+└── logs/                                  # Runtime file logs (perception, planning, control)
+```
+
+<br>
+
+---
+
+## Engineering Design Process
+
+BoilerHawk was developed through a rigorous iterative design cycle of **identify → prototype → test → analyze → refine**, applied repeatedly across every subsystem.
+
+### Requirements Definition
+
+The project began with a clear top-level requirement: an autonomous drone that can fly from a start position to a goal while avoiding obstacles in real time, using only onboard sensing. This was decomposed into functional subsystems — simulation environment, sensor integration, perception, path planning, and flight control — each with measurable acceptance criteria (e.g., the drone must reach within 0.5 m of the goal, obstacle clearance must exceed the airframe radius, the system must launch from a single command).
+
+### Iterative Prototyping & Experimentation
+
+Development followed an incremental integration strategy. Each subsystem was built and validated in isolation before being composed with the others:
+
+1. **Simulation environment** — The Gazebo world and drone model were tested first by verifying sensor output (depth images, point clouds) and ArduPilot SITL connectivity before any autonomy code existed.
+2. **Perception pipeline** — Point cloud → occupancy grid conversion went through multiple design iterations driven by flight-test data. The initial drone-centered grid was replaced with a **fixed world-frame grid** once testing showed that a moving grid lost track of previously-seen obstacles. Ground filtering, first implemented as a simple yaw-based rotation, was upgraded to **full quaternion rotation** after in-flight data revealed that forward-flight pitch tilt (10–15°) biased ground points upward by 0.3–1.5 m, causing false obstacle detections. Point accumulation was further refined from raw per-point counting to a **frame-based binary detection with decay** system — each cell gains a fixed score per detection frame and decays every frame — after analysis showed that asynchronous pose/cloud timing mismatches produce unavoidable transient false positives that a decay mechanism naturally filters out while preserving persistent real-wall detections.
+3. **Path planning** — A\* was first tested on a static grid with 18 unit tests covering empty grids, mazes, narrow passages, unreachable goals, and coordinate round-trips. When integrated with the live perception grid, experiments showed that a pure A\* global planner failed for goals outside the 10 m sensor range. This led to the **two-tier architecture**: a straight-line global path with local A\* replanning only when obstacles enter the grid — a key architectural pivot driven by data from failed flight tests.
+4. **Control** — Waypoint-following was validated in obstacle-free flights first (start → goal in open space), confirming smooth convergence. Yaw control was added after observing that the drone flew sideways, leaving the forward-facing depth camera blind to upcoming obstacles.
+
+### Data Analysis & Interpretation
+
+Each flight test produced observable data — drone position logs, occupancy grid snapshots, planned path topics, and control status diagnostics — that were analyzed to diagnose issues:
+
+- **Back-and-forth oscillation** was diagnosed by examining `/local_path` waypoint indices: the control node was re-selecting already-passed waypoints on each path update. The fix was to skip forward past all waypoints within the `waypoint_threshold` radius after finding the closest one.
+- **Replanning instability** was identified when the drone alternated between two paths every planning cycle. Topic logs showed A\* producing a new detour each iteration because it was also checking waypoints *behind* the drone. The solution: only scan waypoints ahead of the current position and enforce a 5-second replan cooldown.
+- **A\* failure near inflated obstacles** appeared as repeated "A\* replan failed" log messages when the start or goal cell landed inside an inflated region. Grid data analysis confirmed this, leading to the **nearest-free-cell BFS fallback** — a breadth-first search that shifts the start/goal to the closest unoccupied cell.
+- **Performance degradation** was measured by monitoring Gazebo real-time factor. Reducing the depth camera from 640×480 @ 30 Hz to 320×240 @ 10 Hz and disabling shadows recovered acceptable simulation performance, validated by real-time factor returning above 0.8.
+
+### Engineering Judgment & Trade-offs
+
+Several design decisions required balancing competing constraints:
+
+| Decision | Trade-off | Rationale |
+|----------|-----------|-----------|
+| 0.2 m grid resolution | Finer resolution detects smaller gaps but increases A\* computation | 0.2 m is ≈ 2× the airframe radius — sufficient for clearance without excessive cost |
+| 0.6 m inflation radius | Larger margin is safer but may close off valid passages | Bumped from 0.4 m after diagonal grazing incidents; still keeps 3.5 m maze gaps navigable with adequate clearance || Decay-based hit counting with permanent obstacles | Aggressive decay may drop real obstacles; no decay lets noise accumulate | Increment 3 / decay 1 means a cell seen 2+ consecutive frames becomes occupied, while single-frame noise fades in 3 frames. Once a cell reaches `min_hits` it is **never decayed**, preventing confirmed walls from disappearing when outside the camera FOV || Physics step = 1 ms | Smaller steps improve accuracy but reduce real-time factor | ArduPilot requires ≥ 400 Hz main loop; 1 ms was the maximum step that maintained stable flight |
+| Straight-line global path | Simpler than full global A\* but doesn't pre-plan around distant obstacles | Acceptable because the drone replans locally as it approaches each obstacle; a global planner would need a pre-built map that doesn't exist |
+| 5 s replan cooldown | Prevents oscillation but delays reaction to new obstacles | Balances stability against responsiveness; at 2 m/s cruise the drone covers 10 m between replans, within sensor range |
+
+### Verification & Validation
+
+The system was validated at multiple levels:
+- **Unit tests** (18 path planner + control tests) verify algorithmic correctness in isolation
+- **Integration flights** confirm end-to-end behavior: the drone successfully navigates a zigzag maze corridor, finding gaps in three walls to reach the goal
+- **Regression testing** after each change ensures previous fixes remain intact (e.g., verifying that the physics step revert didn't break arming, that inflation didn't close off valid paths)
+
+This structured process — grounded in empirical testing, quantitative analysis of topic data, and deliberate engineering trade-offs — transformed an initial collection of ROS 2 packages into a cohesive autonomous system.
+
+<br>
+
+---
+
+## License
+
+MIT

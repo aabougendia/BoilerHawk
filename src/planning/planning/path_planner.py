@@ -166,12 +166,16 @@ class PathPlanner:
             return []
         
         if not self.is_valid_cell(start):
-            print(f"Error: Start position {start} is not valid")
-            return []
+            start = self._nearest_free_cell(start)
+            if start is None:
+                print(f"Error: No free cell near start")
+                return []
         
         if not self.is_valid_cell(goal):
-            print(f"Error: Goal position {goal} is not valid")
-            return []
+            goal = self._nearest_free_cell(goal)
+            if goal is None:
+                print(f"Error: No free cell near goal")
+                return []
         
         # Initialize start and goal nodes
         start_node = Node(start)
@@ -275,8 +279,10 @@ class PathPlanner:
                         break
                 
                 if next_goal:
-                    # Replan local segment
+                    # Replan local segment WITHOUT overwriting global_path
+                    saved_global = self.global_path
                     replanned = self.plan_global_path(current_position, next_goal)
+                    self.global_path = saved_global  # restore
                     if replanned:
                         self.local_path = replanned[:lookahead_distance]
                         return self.local_path
@@ -288,9 +294,34 @@ class PathPlanner:
         self.local_path = local_segment
         return self.local_path
     
+    def _nearest_free_cell(self, pos: Tuple[int, int],
+                           max_radius: int = 15) -> Optional[Tuple[int, int]]:
+        """Find the nearest free (valid) grid cell via BFS spiral."""
+        from collections import deque
+        row, col = pos
+        visited = {(row, col)}
+        queue = deque([(row, col)])
+        while queue:
+            r, c = queue.popleft()
+            if 0 <= r < self.grid_height and 0 <= c < self.grid_width:
+                if self.occupancy_grid[r, c] < self.occupancy_threshold \
+                        and self.occupancy_grid[r, c] != -1:
+                    return (r, c)
+            dist = abs(r - row) + abs(c - col)
+            if dist >= max_radius:
+                continue
+            for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                nr, nc = r + dr, c + dc
+                if (nr, nc) not in visited:
+                    visited.add((nr, nc))
+                    queue.append((nr, nc))
+        return None
+
     def grid_to_world(self, grid_pos: Tuple[int, int]) -> Tuple[float, float]:
         """
         Convert grid coordinates to world coordinates.
+        
+        Grid uses standard ROS convention: row 0 = bottom (lowest y).
         
         Args:
             grid_pos: (row, col) in grid
@@ -300,20 +331,25 @@ class PathPlanner:
         """
         row, col = grid_pos
         x = self.grid_origin[0] + col * self.grid_resolution
-        y = self.grid_origin[1] + (self.grid_height - row) * self.grid_resolution
+        y = self.grid_origin[1] + row * self.grid_resolution
         return (x, y)
     
     def world_to_grid(self, world_pos: Tuple[float, float]) -> Tuple[int, int]:
         """
         Convert world coordinates to grid coordinates.
         
+        Grid uses standard ROS convention: row 0 = bottom (lowest y).
+        
         Args:
             world_pos: (x, y) in world frame
             
         Returns:
-            (row, col) in grid
+            (row, col) in grid, clamped to valid bounds
         """
         x, y = world_pos
-        col = int((x - self.grid_origin[0]) / self.grid_resolution)
-        row = self.grid_height - int((y - self.grid_origin[1]) / self.grid_resolution)
+        col = round((x - self.grid_origin[0]) / self.grid_resolution)
+        row = round((y - self.grid_origin[1]) / self.grid_resolution)
+        # Clamp to valid grid bounds
+        row = max(0, min(row, self.grid_height - 1))
+        col = max(0, min(col, self.grid_width - 1))
         return (row, col)

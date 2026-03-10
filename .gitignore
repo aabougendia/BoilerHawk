@@ -3,3 +3,6 @@ install/
 log/
 *.pyc
 __pycache__/
+
+# Node log files
+logs/

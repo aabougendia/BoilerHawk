@@ -34,13 +34,13 @@ def generate_launch_description():
     
     pointcloud_topic_arg = DeclareLaunchArgument(
         'pointcloud_topic',
-        default_value='/depth_camera/points',
+        default_value='/camera/points',
         description='Point cloud topic from depth camera'
     )
     
     occupancy_topic_arg = DeclareLaunchArgument(
         'occupancy_topic',
-        default_value='/perception/occupancy',
+        default_value='/occupancy_grid',
         description='Output occupancy grid topic'
     )
     

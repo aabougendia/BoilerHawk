@@ -8,8 +8,7 @@ control_node:
     setpoint_rate: 20.0
     
     # Automatically arm the drone when ready
-    # WARNING: Set to false for initial testing
-    auto_arm: false
+    auto_arm: true
     
     # Automatically switch to GUIDED mode when connected
     auto_mode_switch: true

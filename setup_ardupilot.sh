@@ -5,9 +5,9 @@ echo "==== BoilerHawk ArduPilot + Gazebo Harmonic Setup ===="
 echo ""
 
 # Check if already installed
-if [ -d "$HOME/gz_ws/src/ardupilot_gazebo" ]; then
-    echo "✓ ArduPilot Gazebo plugin already exists at ~/gz_ws/src/ardupilot_gazebo"
-    echo "  To rebuild: cd ~/gz_ws/src/ardupilot_gazebo/build && make -j4"
+if [ -d "$HOME/ardupilot_gazebo" ]; then
+    echo "✓ ArduPilot Gazebo plugin already exists at ~/ardupilot_gazebo"
+    echo "  To rebuild: cd ~/ardupilot_gazebo/build && make -j4"
     echo ""
 else
     echo "Installing ArduPilot Gazebo plugin..."
@@ -23,8 +23,7 @@ else
     # Clone repository
     echo ""
     echo "2. Cloning ardupilot_gazebo repository..."
-    mkdir -p $HOME/gz_ws/src
-    cd $HOME/gz_ws/src
+    cd $HOME
     git clone https://github.com/ArduPilot/ardupilot_gazebo.git
     
     # Build plugin
@@ -59,18 +58,18 @@ else
     echo "" >> ~/.bashrc
     echo "# ArduPilot Gazebo Harmonic Integration" >> ~/.bashrc
     echo "export GZ_VERSION=harmonic" >> ~/.bashrc
-    echo "export GZ_SIM_SYSTEM_PLUGIN_PATH=\$HOME/gz_ws/src/ardupilot_gazebo/build:\${GZ_SIM_SYSTEM_PLUGIN_PATH}" >> ~/.bashrc
-    echo "export GZ_SIM_RESOURCE_PATH=\$HOME/gz_ws/src/ardupilot_gazebo/models:\$HOME/gz_ws/src/ardupilot_gazebo/worlds:\${GZ_SIM_RESOURCE_PATH}" >> ~/.bashrc
-    echo "export GZ_SIM_RESOURCE_PATH=/opt/ros/jazzy/share:\$HOME/boilerHawk_ws/src/sim_models/models:\${GZ_SIM_RESOURCE_PATH}" >> ~/.bashrc
+    echo "export GZ_SIM_SYSTEM_PLUGIN_PATH=\$HOME/ardupilot_gazebo/build:\${GZ_SIM_SYSTEM_PLUGIN_PATH}" >> ~/.bashrc
+    echo "export GZ_SIM_RESOURCE_PATH=\$HOME/ardupilot_gazebo/models:\$HOME/ardupilot_gazebo/worlds:\${GZ_SIM_RESOURCE_PATH}" >> ~/.bashrc
+    echo "export GZ_SIM_RESOURCE_PATH=/opt/ros/jazzy/share:\$HOME/BoilerHawk/BoilerHawk/src/sim_models/models:\${GZ_SIM_RESOURCE_PATH}" >> ~/.bashrc
     echo ""
     echo "✓ Environment variables added to ~/.bashrc"
 fi
 
 # Set for current session
 export GZ_VERSION=harmonic
-export GZ_SIM_SYSTEM_PLUGIN_PATH=$HOME/gz_ws/src/ardupilot_gazebo/build:${GZ_SIM_SYSTEM_PLUGIN_PATH}
-export GZ_SIM_RESOURCE_PATH=$HOME/gz_ws/src/ardupilot_gazebo/models:$HOME/gz_ws/src/ardupilot_gazebo/worlds:${GZ_SIM_RESOURCE_PATH}
-export GZ_SIM_RESOURCE_PATH=/opt/ros/jazzy/share:$HOME/boilerHawk_ws/src/sim_models/models:${GZ_SIM_RESOURCE_PATH}
+export GZ_SIM_SYSTEM_PLUGIN_PATH=$HOME/ardupilot_gazebo/build:${GZ_SIM_SYSTEM_PLUGIN_PATH}
+export GZ_SIM_RESOURCE_PATH=$HOME/ardupilot_gazebo/models:$HOME/ardupilot_gazebo/worlds:${GZ_SIM_RESOURCE_PATH}
+export GZ_SIM_RESOURCE_PATH=/opt/ros/jazzy/share:$HOME/BoilerHawk/BoilerHawk/src/sim_models/models:${GZ_SIM_RESOURCE_PATH}
 
 echo ""
 echo "==== Setup Complete ===="

@@ -1,279 +1,226 @@
 #!/usr/bin/env python3
 """
-Planning Node for ROS 2.
-Subscribes to occupancy grid from perception module and publishes local/global paths.
+Planning Node — A*-based path planning on a persistent occupancy grid.
+
+Algorithm (simple & robust):
+  1. Grid starts all-free → initial A* gives a straight-ish path to goal.
+  2. As the drone flies, perception marks obstacles in the grid.
+  3. Each planning tick: check if any waypoint ahead is now occupied.
+  4. If so, recompute A* from the drone's current position to the goal.
+  5. Publish global path + local lookahead window for control.
 """
 
+import logging
+import math
+import os
 import rclpy
 from rclpy.node import Node
 from nav_msgs.msg import OccupancyGrid, Path
 from geometry_msgs.msg import PoseStamped
-from std_msgs.msg import Header
 from visualization_msgs.msg import Marker, MarkerArray
 import numpy as np
 
 from planning.path_planner import PathPlanner
 
 
+def _setup_file_logger(node_name: str) -> logging.Logger:
+    log_dir = os.path.expanduser('~/BoilerHawk/BoilerHawk/logs')
+    os.makedirs(log_dir, exist_ok=True)
+    flog = logging.getLogger(f'bhawk.{node_name}')
+    flog.setLevel(logging.DEBUG)
+    if not flog.handlers:
+        fh = logging.FileHandler(
+            os.path.join(log_dir, f'{node_name}.log'), mode='w')
+        fh.setFormatter(logging.Formatter(
+            '%(asctime)s [%(levelname)s] %(message)s',
+            datefmt='%H:%M:%S'))
+        flog.addHandler(fh)
+    return flog
+
+
 class PlanningNode(Node):
-    """
-    ROS 2 node for planning and path planning.
-    """
-    
+    """ROS 2 node for A*-based path planning on a live occupancy grid."""
+
     def __init__(self):
         super().__init__('planning_node')
-        
-        # Declare parameters
+
+        # Parameters
         self.declare_parameter('occupancy_threshold', 50)
-        self.declare_parameter('lookahead_distance', 20)
+        self.declare_parameter('lookahead_distance', 30)
         self.declare_parameter('planning_frequency', 2.0)
         self.declare_parameter('start_x', 0.0)
         self.declare_parameter('start_y', 0.0)
-        self.declare_parameter('goal_x', 5.0)
-        self.declare_parameter('goal_y', 5.0)
-        
-        # Get parameters
-        occupancy_threshold = self.get_parameter('occupancy_threshold').value
-        self.lookahead_distance = self.get_parameter('lookahead_distance').value
-        planning_frequency = self.get_parameter('planning_frequency').value
+        self.declare_parameter('goal_x', 0.0)
+        self.declare_parameter('goal_y', 10.0)
+
+        self.lookahead = self.get_parameter('lookahead_distance').value
+        freq = self.get_parameter('planning_frequency').value
         self.start_x = self.get_parameter('start_x').value
         self.start_y = self.get_parameter('start_y').value
         self.goal_x = self.get_parameter('goal_x').value
         self.goal_y = self.get_parameter('goal_y').value
-        
-        # Initialize path planner
-        self.path_planner = PathPlanner(occupancy_threshold=occupancy_threshold)
-        
-        # State variables
-        self.occupancy_grid_received = False
-        self.global_path_computed = False
-        self.current_position = None
-        
+
+        self.planner = PathPlanner(
+            occupancy_threshold=self.get_parameter('occupancy_threshold').value)
+
+        # File logger
+        self.flog = _setup_file_logger('planning')
+        self.flog.info('=== Planning node started ===')
+
+        # State
+        self.global_path = []      # [(x, y), ...] in world coords
+        self.current_pos = None    # (x, y)
+        self.grid_ready = False
+        self._replan_cooldown_ns = 2_000_000_000  # 2 s
+        self._last_replan_time = None
+
         # Subscribers
-        self.occupancy_sub = self.create_subscription(
-            OccupancyGrid,
-            '/occupancy_grid',
-            self.occupancy_callback,
-            10
-        )
-        
-        self.pose_sub = self.create_subscription(
-            PoseStamped,
-            '/current_pose',
-            self.pose_callback,
-            10
-        )
-        
+        self.create_subscription(
+            OccupancyGrid, '/occupancy_grid', self._grid_cb, 10)
+        self.create_subscription(
+            PoseStamped, '/current_pose', self._pose_cb, 10)
+
         # Publishers
-        self.global_path_pub = self.create_publisher(
-            Path,
-            '/global_path',
-            10
-        )
-        
-        self.local_path_pub = self.create_publisher(
-            Path,
-            '/local_path',
-            10
-        )
-        
-        self.path_markers_pub = self.create_publisher(
-            MarkerArray,
-            '/path_markers',
-            10
-        )
-        
-        # Timer for periodic path updates
-        self.create_timer(1.0 / planning_frequency, self.planning_callback)
-        
-        self.get_logger().info('Planning node initialized')
-        self.get_logger().info(f'Start: ({self.start_x}, {self.start_y}), Goal: ({self.goal_x}, {self.goal_y})')
-    
-    def occupancy_callback(self, msg: OccupancyGrid):
-        """
-        Callback for occupancy grid updates.
-        
-        Args:
-            msg: OccupancyGrid message
-        """
-        # Convert occupancy grid to numpy array
-        width = msg.info.width
-        height = msg.info.height
-        resolution = msg.info.resolution
-        origin_x = msg.info.origin.position.x
-        origin_y = msg.info.origin.position.y
-        
-        # Reshape data to 2D grid
-        grid_data = np.array(msg.data).reshape((height, width))
-        
-        # Update path planner
-        self.path_planner.update_occupancy_grid(
-            grid_data,
-            resolution,
-            (origin_x, origin_y)
-        )
-        
-        self.occupancy_grid_received = True
-        self.get_logger().info(f'Occupancy grid received: {width}x{height}, resolution: {resolution}')
-        
-        # Trigger global path planning if not done yet
-        if not self.global_path_computed:
-            self.compute_global_path()
-    
-    def pose_callback(self, msg: PoseStamped):
-        """
-        Callback for current pose updates.
-        
-        Args:
-            msg: PoseStamped message
-        """
-        world_pos = (msg.pose.position.x, msg.pose.position.y)
-        self.current_position = self.path_planner.world_to_grid(world_pos)
-    
-    def compute_global_path(self):
-        """
-        Compute global path from start to goal.
-        """
-        if not self.occupancy_grid_received:
-            self.get_logger().warn('Cannot compute global path: No occupancy grid received')
-            return
-        
-        # Convert start and goal to grid coordinates
-        start_grid = self.path_planner.world_to_grid((self.start_x, self.start_y))
-        goal_grid = self.path_planner.world_to_grid((self.goal_x, self.goal_y))
-        
-        self.get_logger().info(f'Computing global path from {start_grid} to {goal_grid}')
-        
-        # Plan global path
-        global_path = self.path_planner.plan_global_path(start_grid, goal_grid)
-        
-        if global_path:
-            self.global_path_computed = True
-            self.get_logger().info(f'Global path computed: {len(global_path)} waypoints')
-            
-            # Publish global path
-            self.publish_path(global_path, self.global_path_pub, 'map')
+        self.global_pub = self.create_publisher(Path, '/global_path', 10)
+        self.local_pub = self.create_publisher(Path, '/local_path', 10)
+        self.marker_pub = self.create_publisher(
+            MarkerArray, '/path_markers', 10)
+
+        self.create_timer(1.0 / freq, self._tick)
+
+        plan_msg = (
+            f'Planning: ({self.start_x},{self.start_y}) → '
+            f'({self.goal_x},{self.goal_y})')
+        self.get_logger().info(plan_msg)
+        self.flog.info(plan_msg)
+
+    # ---- Callbacks ------------------------------------------------
+
+    def _pose_cb(self, msg: PoseStamped):
+        self.current_pos = (msg.pose.position.x, msg.pose.position.y)
+
+    def _grid_cb(self, msg: OccupancyGrid):
+        grid = np.array(msg.data).reshape((msg.info.height, msg.info.width))
+        self.planner.update_occupancy_grid(
+            grid, msg.info.resolution,
+            (msg.info.origin.position.x, msg.info.origin.position.y))
+        self.grid_ready = True
+
+        occ_pct = 100.0 * np.count_nonzero(grid >= 50) / grid.size
+        self.flog.info(
+            f'Grid update: {msg.info.width}x{msg.info.height}, '
+            f'{occ_pct:.1f}% occupied')
+
+        # First grid → compute initial path
+        if not self.global_path:
+            self._plan_from(self.start_x, self.start_y)
+
+    # ---- Planning -------------------------------------------------
+
+    def _plan_from(self, sx, sy):
+        """Run A* from (sx, sy) to goal; update global_path."""
+        s = self.planner.world_to_grid((sx, sy))
+        g = self.planner.world_to_grid((self.goal_x, self.goal_y))
+        result = self.planner.plan_global_path(s, g)
+        if result:
+            self.global_path = [
+                self.planner.grid_to_world(c) for c in result]
+            self._publish(self.global_path, self.global_pub)
+            path_msg = f'Path: {len(self.global_path)} waypoints from ({sx:.1f},{sy:.1f})'
+            self.get_logger().info(path_msg)
+            self.flog.info(path_msg)
         else:
-            self.get_logger().error('Failed to compute global path')
-    
-    def planning_callback(self):
-        """
-        Periodic callback for path planning updates.
-        """
-        if not self.occupancy_grid_received:
+            self.get_logger().warn('A* failed — keeping previous path')
+            self.flog.warning(f'A* FAILED from ({sx:.1f},{sy:.1f}) to ({self.goal_x:.1f},{self.goal_y:.1f})')
+
+    def _tick(self):
+        """Periodic: check path validity, replan if blocked, publish."""
+        if not self.grid_ready or not self.global_path:
             return
-        
-        if not self.global_path_computed:
-            return
-        
-        # Use start position if current position not available
-        if self.current_position is None:
-            self.current_position = self.path_planner.world_to_grid((self.start_x, self.start_y))
-        
-        # Compute local path
-        local_path = self.path_planner.plan_local_path(
-            self.current_position,
-            self.lookahead_distance
-        )
-        
-        if local_path:
-            # Publish local path
-            self.publish_path(local_path, self.local_path_pub, 'map')
-            
-            # Publish visualization markers
-            self.publish_path_markers()
-    
-    def publish_path(self, path: list, publisher, frame_id: str):
-        """
-        Publish path as ROS Path message.
-        
-        Args:
-            path: List of grid positions
-            publisher: ROS publisher
-            frame_id: Frame ID for the path
-        """
-        path_msg = Path()
-        path_msg.header = Header()
-        path_msg.header.stamp = self.get_clock().now().to_msg()
-        path_msg.header.frame_id = frame_id
-        
-        for grid_pos in path:
-            world_pos = self.path_planner.grid_to_world(grid_pos)
-            
-            pose = PoseStamped()
-            pose.header = path_msg.header
-            pose.pose.position.x = world_pos[0]
-            pose.pose.position.y = world_pos[1]
-            pose.pose.position.z = 0.0
-            pose.pose.orientation.w = 1.0
-            
-            path_msg.poses.append(pose)
-        
-        publisher.publish(path_msg)
-    
-    def publish_path_markers(self):
-        """
-        Publish visualization markers for paths.
-        """
-        marker_array = MarkerArray()
-        
-        # Global path marker
-        if self.path_planner.global_path:
-            global_marker = Marker()
-            global_marker.header.frame_id = 'map'
-            global_marker.header.stamp = self.get_clock().now().to_msg()
-            global_marker.ns = 'global_path'
-            global_marker.id = 0
-            global_marker.type = Marker.LINE_STRIP
-            global_marker.action = Marker.ADD
-            global_marker.scale.x = 0.05
-            global_marker.color.r = 0.0
-            global_marker.color.g = 0.0
-            global_marker.color.b = 1.0
-            global_marker.color.a = 0.8
-            
-            for grid_pos in self.path_planner.global_path:
-                world_pos = self.path_planner.grid_to_world(grid_pos)
-                point = PoseStamped().pose.position
-                point.x = world_pos[0]
-                point.y = world_pos[1]
-                point.z = 0.0
-                global_marker.points.append(point)
-            
-            marker_array.markers.append(global_marker)
-        
-        # Local path marker
-        if self.path_planner.local_path:
-            local_marker = Marker()
-            local_marker.header.frame_id = 'map'
-            local_marker.header.stamp = self.get_clock().now().to_msg()
-            local_marker.ns = 'local_path'
-            local_marker.id = 1
-            local_marker.type = Marker.LINE_STRIP
-            local_marker.action = Marker.ADD
-            local_marker.scale.x = 0.08
-            local_marker.color.r = 1.0
-            local_marker.color.g = 0.0
-            local_marker.color.b = 0.0
-            local_marker.color.a = 1.0
-            
-            for grid_pos in self.path_planner.local_path:
-                world_pos = self.path_planner.grid_to_world(grid_pos)
-                point = PoseStamped().pose.position
-                point.x = world_pos[0]
-                point.y = world_pos[1]
-                point.z = 0.0
-                local_marker.points.append(point)
-            
-            marker_array.markers.append(local_marker)
-        
-        self.path_markers_pub.publish(marker_array)
+
+        cx, cy = self.current_pos or (self.start_x, self.start_y)
+
+        # Find closest waypoint
+        closest = min(
+            range(len(self.global_path)),
+            key=lambda i: math.hypot(
+                self.global_path[i][0] - cx,
+                self.global_path[i][1] - cy))
+
+        # Check waypoints AHEAD for obstacles
+        blocked = False
+        for wx, wy in self.global_path[closest:]:
+            cell = self.planner.world_to_grid((wx, wy))
+            if not self.planner.is_valid_cell(cell):
+                blocked = True
+                break
+
+        if blocked:
+            now = self.get_clock().now()
+            ok = (self._last_replan_time is None
+                  or (now - self._last_replan_time).nanoseconds
+                  >= self._replan_cooldown_ns)
+            if ok:
+                self.get_logger().warn('Obstacle on path — replanning')
+                self.flog.warning(f'Replan triggered at ({cx:.1f},{cy:.1f})')
+                self._plan_from(cx, cy)
+                self._last_replan_time = now
+                # Recompute closest after replan
+                if self.global_path:
+                    closest = min(
+                        range(len(self.global_path)),
+                        key=lambda i: math.hypot(
+                            self.global_path[i][0] - cx,
+                            self.global_path[i][1] - cy))
+
+        # Local path = upcoming waypoint window
+        end = min(closest + self.lookahead, len(self.global_path))
+        local = self.global_path[closest:end]
+        if local:
+            self._publish(local, self.local_pub)
+        self._publish_markers()
+
+    # ---- Publishing -----------------------------------------------
+
+    def _publish(self, path, pub):
+        msg = Path()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.frame_id = 'map'
+        for wx, wy in path:
+            p = PoseStamped()
+            p.header = msg.header
+            p.pose.position.x = float(wx)
+            p.pose.position.y = float(wy)
+            p.pose.position.z = 0.0
+            p.pose.orientation.w = 1.0
+            msg.poses.append(p)
+        pub.publish(msg)
+
+    def _publish_markers(self):
+        ma = MarkerArray()
+        stamp = self.get_clock().now().to_msg()
+        if self.global_path:
+            m = Marker()
+            m.header.frame_id = 'map'
+            m.header.stamp = stamp
+            m.ns = 'global_path'
+            m.id = 0
+            m.type = Marker.LINE_STRIP
+            m.action = Marker.ADD
+            m.scale.x = 0.05
+            m.color.b = 1.0
+            m.color.a = 0.8
+            for wx, wy in self.global_path:
+                pt = PoseStamped().pose.position
+                pt.x, pt.y, pt.z = float(wx), float(wy), 0.1
+                m.points.append(pt)
+            ma.markers.append(m)
+        self.marker_pub.publish(ma)
 
 
 def main(args=None):
     rclpy.init(args=args)
     node = PlanningNode()
-    
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
