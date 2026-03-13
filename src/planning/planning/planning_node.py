@@ -79,6 +79,8 @@ class PlanningNode(Node):
             OccupancyGrid, '/occupancy_grid', self._grid_cb, 10)
         self.create_subscription(
             PoseStamped, '/current_pose', self._pose_cb, 10)
+        self.create_subscription(
+            PoseStamped, '/mission/goal', self._mission_goal_cb, 10)
 
         # Publishers
         self.global_pub = self.create_publisher(Path, '/global_path', 10)
@@ -98,6 +100,23 @@ class PlanningNode(Node):
 
     def _pose_cb(self, msg: PoseStamped):
         self.current_pos = (msg.pose.position.x, msg.pose.position.y)
+
+    def _mission_goal_cb(self, msg: PoseStamped):
+        """Accept a dynamic goal from mission_manager's /mission/goal topic."""
+        new_gx = msg.pose.position.x
+        new_gy = msg.pose.position.y
+        if abs(new_gx - self.goal_x) < 0.05 and abs(new_gy - self.goal_y) < 0.05:
+            return  # same goal, skip
+        self.goal_x = new_gx
+        self.goal_y = new_gy
+        self.get_logger().info(
+            f'New mission goal received: ({self.goal_x:.1f}, {self.goal_y:.1f})')
+        self.flog.info(
+            f'Mission goal updated: ({self.goal_x:.1f}, {self.goal_y:.1f})')
+        # Replan immediately from current position
+        if self.grid_ready:
+            cx, cy = self.current_pos or (self.start_x, self.start_y)
+            self._plan_from(cx, cy)
 
     def _grid_cb(self, msg: OccupancyGrid):
         grid = np.array(msg.data).reshape((msg.info.height, msg.info.width))

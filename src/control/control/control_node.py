@@ -114,6 +114,14 @@ class ControlNode(Node):
             self.pose_callback,
             qos_profile
         )
+
+        # Listen to mission goal to dynamically update target altitude
+        self.create_subscription(
+            PoseStamped,
+            '/mission/goal',
+            self._mission_goal_cb,
+            10
+        )
         
         # Publishers
         self.setpoint_pub = self.create_publisher(
@@ -125,6 +133,13 @@ class ControlNode(Node):
         self.status_pub = self.create_publisher(
             String,
             '/control/status',
+            10
+        )
+        
+        # Waypoint reached publisher (for mission_manager integration)
+        self.waypoint_reached_pub = self.create_publisher(
+            String,
+            '/control/waypoint_reached',
             10
         )
         
@@ -169,6 +184,31 @@ class ControlNode(Node):
         self.get_logger().info(f'Auto arm: {self.auto_arm}')
         self.get_logger().info(f'Auto mode switch: {self.auto_mode_switch}')
         self.get_logger().info(f'SITL mode (failsafes disabled): {self.sitl_mode}')
+
+    def _mission_goal_cb(self, msg: PoseStamped) -> None:
+        """Update target_altitude dynamically from mission goal Z."""
+        new_alt = msg.pose.position.z
+        if new_alt > 0.1 and abs(new_alt - self.target_altitude) > 0.05:
+            self.get_logger().info(
+                f'Target altitude updated: {self.target_altitude:.2f} -> {new_alt:.2f}m')
+            self.target_altitude = new_alt
+            if self.target_setpoint is not None:
+                # Re-apply to current path setpoint immediately
+                self.target_setpoint.pose.position.z = new_alt
+            elif self.current_pose is not None:
+                # Path exhausted (drone is at dropoff) — create hold setpoint
+                # at current XY with new altitude so drone actively descends
+                hold = PoseStamped()
+                hold.header.stamp = self.get_clock().now().to_msg()
+                hold.header.frame_id = 'map'
+                hold.pose.position.x = self.current_pose.pose.position.x
+                hold.pose.position.y = self.current_pose.pose.position.y
+                hold.pose.position.z = new_alt
+                hold.pose.orientation = self.current_pose.pose.orientation
+                self.target_setpoint = hold
+                self.get_logger().info(
+                    f'Hold setpoint created at ({hold.pose.position.x:.2f}, '
+                    f'{hold.pose.position.y:.2f}, {new_alt:.2f}m) for descent')
     
     def disable_throttle_failsafe(self):
         """
@@ -401,12 +441,15 @@ class ControlNode(Node):
             return
 
         if self.target_setpoint is None:
-            # If no waypoint available, hold current position
+            # If no waypoint available, hold current XY at target altitude
             if self.current_pose is not None:
                 setpoint = PoseStamped()
                 setpoint.header.stamp = self.get_clock().now().to_msg()
                 setpoint.header.frame_id = 'map'
-                setpoint.pose = self.current_pose.pose
+                setpoint.pose.position.x = self.current_pose.pose.position.x
+                setpoint.pose.position.y = self.current_pose.pose.position.y
+                setpoint.pose.position.z = self.target_altitude
+                setpoint.pose.orientation = self.current_pose.pose.orientation
                 self.setpoint_pub.publish(setpoint)
                 self.diag_setpoint_published_count += 1
             return
@@ -596,12 +639,21 @@ class ControlNode(Node):
         if self.current_path is None:
             return
         
+        # Publish waypoint reached notification for mission_manager
+        reached_msg = String()
+        reached_msg.data = f'waypoint_reached:{self.current_waypoint_idx}'
+        self.waypoint_reached_pub.publish(reached_msg)
+        
         self.current_waypoint_idx += 1
         
         if self.current_waypoint_idx >= len(self.current_path.poses):
             if not self._path_complete_logged:
                 self.get_logger().info('Path complete! Reached final waypoint.')
                 self._path_complete_logged = True
+                # Notify mission_manager that the current path is complete
+                done_msg = String()
+                done_msg.data = 'path_complete'
+                self.waypoint_reached_pub.publish(done_msg)
             # Hold at final position
             return
         

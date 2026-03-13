@@ -1,0 +1,337 @@
+<?xml version="1.0" ?>
+<sdf version="1.9">
+  <world name="delivery_world">
+    <!-- Physics settings optimized for drone flight -->
+    <physics name="1ms" type="ignore">
+      <max_step_size>0.001</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+    </physics>
+
+    <!-- Essential Gazebo plugins -->
+    <plugin
+      filename="gz-sim-physics-system"
+      name="gz::sim::systems::Physics">
+    </plugin>
+    <plugin
+      filename="gz-sim-user-commands-system"
+      name="gz::sim::systems::UserCommands">
+    </plugin>
+    <plugin
+      filename="gz-sim-scene-broadcaster-system"
+      name="gz::sim::systems::SceneBroadcaster">
+    </plugin>
+    <plugin
+      filename="gz-sim-sensors-system"
+      name="gz::sim::systems::Sensors">
+      <render_engine>ogre2</render_engine>
+    </plugin>
+    <plugin
+      filename="gz-sim-imu-system"
+      name="gz::sim::systems::Imu">
+    </plugin>
+    <plugin
+      filename="gz-sim-navsat-system"
+      name="gz::sim::systems::NavSat">
+    </plugin>
+    <plugin
+      filename="gz-sim-contact-system"
+      name="gz::sim::systems::Contact">
+    </plugin>
+
+    <!-- Spherical coordinates (required for ArduPilot GPS) -->
+    <spherical_coordinates>
+      <latitude_deg>-35.363262</latitude_deg>
+      <longitude_deg>149.165237</longitude_deg>
+      <elevation>584</elevation>
+      <heading_deg>0</heading_deg>
+      <surface_model>EARTH_WGS84</surface_model>
+    </spherical_coordinates>
+
+    <!-- Directional light -->
+    <light type="directional" name="sun">
+      <cast_shadows>true</cast_shadows>
+      <pose>0 0 10 0 0 0</pose>
+      <diffuse>0.8 0.8 0.8 1</diffuse>
+      <specular>0.2 0.2 0.2 1</specular>
+      <direction>-0.5 0.1 -0.9</direction>
+    </light>
+
+    <scene>
+      <ambient>0.6 0.6 0.6 1</ambient>
+      <background>0.66 0.78 0.9 1</background>
+      <shadows>true</shadows>
+      <grid>true</grid>
+    </scene>
+
+    <!-- ===== Ground plane ===== -->
+    <model name="ground_plane">
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry><plane><normal>0 0 1</normal><size>100 100</size></plane></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><plane><normal>0 0 1</normal><size>100 100</size></plane></geometry>
+          <material>
+            <ambient>0.45 0.5 0.4 1</ambient>
+            <diffuse>0.45 0.5 0.4 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ===== Depot building (PICKUP) — blue, away from start ===== -->
+    <model name="depot">
+      <static>true</static>
+      <pose>-3 2 1.0 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry><box><size>2.5 2.5 2.0</size></box></geometry>
+          <material>
+            <ambient>0.2 0.3 0.7 1</ambient>
+            <diffuse>0.2 0.3 0.8 1</diffuse>
+          </material>
+        </visual>
+        <collision name="collision">
+          <geometry><box><size>2.5 2.5 2.0</size></box></geometry>
+        </collision>
+      </link>
+    </model>
+
+    <!-- Depot landing pad — small marker at drone start -->
+    <model name="depot_pad">
+      <static>true</static>
+      <pose>0 0 0.01 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry><cylinder><radius>1.0</radius><length>0.02</length></cylinder></geometry>
+          <material>
+            <ambient>0.8 0.7 0.1 1</ambient>
+            <diffuse>0.9 0.8 0.1 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ===== Delivery house (DROPOFF) — green, set back from pad ===== -->
+    <model name="delivery_house">
+      <static>true</static>
+      <pose>24 22 1.5 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry><box><size>3.0 3.0 3.0</size></box></geometry>
+          <material>
+            <ambient>0.2 0.6 0.3 1</ambient>
+            <diffuse>0.2 0.7 0.3 1</diffuse>
+          </material>
+        </visual>
+        <collision name="collision">
+          <geometry><box><size>3.0 3.0 3.0</size></box></geometry>
+        </collision>
+      </link>
+    </model>
+
+    <!-- Delivery landing pad — yellow target disc at (20, 18) -->
+    <model name="delivery_pad">
+      <static>true</static>
+      <pose>20 18 0.01 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry><cylinder><radius>1.5</radius><length>0.02</length></cylinder></geometry>
+          <material>
+            <ambient>0.8 0.7 0.1 1</ambient>
+            <diffuse>0.9 0.8 0.1 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ===== Obstacle buildings — 5-obstacle slalom along (0,0)→(20,18) diagonal ===== -->
+    <!--
+         Diagonal line: y ≈ 0.9x.  Obstacles straddle this line on alternating
+         sides so the A* planner must weave left-right-left-right-left.
+
+         Each building: 2×2m footprint, 4m tall. Inflated (+0.4m) ≈ 2.8×2.8m.
+         Corridors between adjacent obstacles: ≥4m clear.
+
+         Obstacle   Position   Diagonal-y   Offset   Forces detour
+         ─────────  ────────   ──────────   ──────   ─────────────
+         A          (5, 4)     4.5          ~on      east
+         B          (9, 9)     8.1          above    west
+         C          (12, 10)   10.8         below    east
+         D          (16, 16)   14.4         above    west
+         E          (18, 14)   16.2         below    east to pad
+    -->
+
+    <!-- Obstacle A (grey) — early on diagonal -->
+    <model name="building_1">
+      <static>true</static>
+      <pose>5 4 2.0 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry><box><size>2.0 2.0 4.0</size></box></geometry>
+          <material>
+            <ambient>0.5 0.5 0.5 1</ambient>
+            <diffuse>0.6 0.6 0.6 1</diffuse>
+          </material>
+        </visual>
+        <collision name="collision">
+          <geometry><box><size>2.0 2.0 4.0</size></box></geometry>
+        </collision>
+      </link>
+    </model>
+
+    <!-- Obstacle B (brown) — above diagonal, forces west detour -->
+    <model name="building_2">
+      <static>true</static>
+      <pose>9 9 2.0 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry><box><size>2.0 2.0 4.0</size></box></geometry>
+          <material>
+            <ambient>0.5 0.35 0.2 1</ambient>
+            <diffuse>0.6 0.4 0.25 1</diffuse>
+          </material>
+        </visual>
+        <collision name="collision">
+          <geometry><box><size>2.0 2.0 4.0</size></box></geometry>
+        </collision>
+      </link>
+    </model>
+
+    <!-- Obstacle C (dark grey) — below diagonal, forces east detour -->
+    <model name="building_3">
+      <static>true</static>
+      <pose>12 10 2.0 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry><box><size>2.0 2.0 4.0</size></box></geometry>
+          <material>
+            <ambient>0.4 0.4 0.45 1</ambient>
+            <diffuse>0.5 0.5 0.55 1</diffuse>
+          </material>
+        </visual>
+        <collision name="collision">
+          <geometry><box><size>2.0 2.0 4.0</size></box></geometry>
+        </collision>
+      </link>
+    </model>
+
+    <!-- Obstacle D (tan) — above diagonal, forces west detour -->
+    <model name="building_4">
+      <static>true</static>
+      <pose>16 16 2.0 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry><box><size>2.0 2.0 4.0</size></box></geometry>
+          <material>
+            <ambient>0.55 0.45 0.3 1</ambient>
+            <diffuse>0.65 0.55 0.35 1</diffuse>
+          </material>
+        </visual>
+        <collision name="collision">
+          <geometry><box><size>2.0 2.0 4.0</size></box></geometry>
+        </collision>
+      </link>
+    </model>
+
+    <!-- Obstacle E (red-brown) — below diagonal, near final approach -->
+    <model name="building_5">
+      <static>true</static>
+      <pose>18 14 2.0 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry><box><size>2.0 2.0 4.0</size></box></geometry>
+          <material>
+            <ambient>0.6 0.3 0.2 1</ambient>
+            <diffuse>0.7 0.35 0.25 1</diffuse>
+          </material>
+        </visual>
+        <collision name="collision">
+          <geometry><box><size>2.0 2.0 4.0</size></box></geometry>
+        </collision>
+      </link>
+    </model>
+
+    <!-- ===== Trees for visual variety (off the main path) ===== -->
+
+    <!-- Tree 1 at (2, 12) — west side decoration -->
+    <model name="tree_1">
+      <static>true</static>
+      <pose>2 12 0 0 0 0</pose>
+      <link name="trunk">
+        <visual name="trunk_visual">
+          <pose>0 0 1.0 0 0 0</pose>
+          <geometry><cylinder><radius>0.15</radius><length>2.0</length></cylinder></geometry>
+          <material>
+            <ambient>0.4 0.25 0.1 1</ambient>
+            <diffuse>0.5 0.3 0.15 1</diffuse>
+          </material>
+        </visual>
+        <collision name="trunk_collision">
+          <pose>0 0 1.0 0 0 0</pose>
+          <geometry><cylinder><radius>0.15</radius><length>2.0</length></cylinder></geometry>
+        </collision>
+        <visual name="canopy_visual">
+          <pose>0 0 2.5 0 0 0</pose>
+          <geometry><sphere><radius>1.0</radius></sphere></geometry>
+          <material>
+            <ambient>0.1 0.5 0.1 1</ambient>
+            <diffuse>0.15 0.6 0.15 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy_collision">
+          <pose>0 0 2.5 0 0 0</pose>
+          <geometry><sphere><radius>1.0</radius></sphere></geometry>
+        </collision>
+      </link>
+    </model>
+
+    <!-- Tree 2 at (22, 8) — east side decoration -->
+    <model name="tree_2">
+      <static>true</static>
+      <pose>22 8 0 0 0 0</pose>
+      <link name="trunk">
+        <visual name="trunk_visual">
+          <pose>0 0 1.25 0 0 0</pose>
+          <geometry><cylinder><radius>0.2</radius><length>2.5</length></cylinder></geometry>
+          <material>
+            <ambient>0.4 0.25 0.1 1</ambient>
+            <diffuse>0.5 0.3 0.15 1</diffuse>
+          </material>
+        </visual>
+        <collision name="trunk_collision">
+          <pose>0 0 1.25 0 0 0</pose>
+          <geometry><cylinder><radius>0.2</radius><length>2.5</length></cylinder></geometry>
+        </collision>
+        <visual name="canopy_visual">
+          <pose>0 0 3.0 0 0 0</pose>
+          <geometry><sphere><radius>1.2</radius></sphere></geometry>
+          <material>
+            <ambient>0.1 0.45 0.1 1</ambient>
+            <diffuse>0.15 0.55 0.15 1</diffuse>
+          </material>
+        </visual>
+        <collision name="canopy_collision">
+          <pose>0 0 3.0 0 0 0</pose>
+          <geometry><sphere><radius>1.2</radius></sphere></geometry>
+        </collision>
+      </link>
+    </model>
+
+    <!-- ===== Delivery package (spawned at drone start, pre-attached) ===== -->
+    <include>
+      <name>delivery_package</name>
+      <uri>model://delivery_package</uri>
+      <pose>0 0 0.1 0 0 0</pose>
+    </include>
+
+    <!-- ===== Iris Quadcopter with depth camera ===== -->
+    <include>
+      <name>iris_drone</name>
+      <uri>model://iris_with_depth_cam</uri>
+      <pose>0 0 0.194 0 0 0</pose>
+    </include>
+
+  </world>
+</sdf>

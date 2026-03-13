@@ -36,6 +36,7 @@ cleanup() {
     pkill -f "mavros_router"    2>/dev/null || true
     pkill -f "control_node"     2>/dev/null || true
     pkill -f "planning_node"    2>/dev/null || true
+    pkill -f "mission_manager"  2>/dev/null || true
     pkill -f "mock_perception"  2>/dev/null || true
     pkill -f "rviz2"            2>/dev/null || true
     sleep 1
@@ -69,7 +70,7 @@ ros2 daemon stop  2>/dev/null || true
 ros2 daemon start 2>/dev/null || true
 
 echo -e "${YELLOW}[setup] Building workspace...${NC}"
-colcon build --packages-select sim_models control planning 2>&1 | tail -3 || true
+colcon build --packages-select sim_models control planning mission_manager 2>&1 | tail -3 || true
 source install/setup.bash
 echo -e "${GREEN}[setup] Build complete${NC}"
 

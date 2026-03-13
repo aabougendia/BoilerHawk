@@ -23,5 +23,12 @@ mission_manager_node:
     health_timeout: 5.0         # seconds — silence before declaring node dead
 
     # ── Default strategy (applied by /mission/load service) ────────
-    strategy_name: "waypoint_survey"
-    strategy_params: '{"min_x": 0, "min_y": 0, "max_x": 5, "max_y": 5, "spacing": 1.0}'
+    strategy_name: "maze_navigation"
+    strategy_params: '{"goal_x": 8.0, "goal_y": 8.0}'
+
+# ── Package Delivery preset ────────────────────────────────────
+# Used by delivery_sim.launch.py (overrides the defaults above):
+#   strategy_name: "package_delivery"
+#   strategy_params: '{"pickup_x": 2.0, "pickup_y": -1.0,
+#                      "dropoff_x": 20.0, "dropoff_y": 18.0,
+#                      "altitude": 3.0, "dwell_time": 3.0}'

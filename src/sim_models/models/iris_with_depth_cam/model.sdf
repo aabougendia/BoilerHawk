@@ -203,6 +203,37 @@
       <child>air_pressure_link</child>
     </joint>
 
+    <!-- ============ Payload Attach Point ============ -->
+    <link name="payload_attach_link">
+      <pose>0 0 -0.05 0 0 0</pose>
+      <inertial>
+        <mass>0.005</mass>
+        <inertia>
+          <ixx>0.0000001</ixx>
+          <ixy>0</ixy>
+          <ixz>0</ixz>
+          <iyy>0.0000001</iyy>
+          <iyz>0</iyz>
+          <izz>0.0000001</izz>
+        </inertia>
+      </inertial>
+    </link>
+    <joint name="payload_joint" type="fixed">
+      <parent>iris_with_standoffs::base_link</parent>
+      <child>payload_attach_link</child>
+    </joint>
+
+    <!-- Detachable joint: attaches delivery_package to the drone.
+         The package starts attached; publish an empty message on
+         /delivery/detach to release it. -->
+    <plugin filename="gz-sim-detachable-joint-system"
+        name="gz::sim::systems::DetachableJoint">
+      <parent_link>payload_attach_link</parent_link>
+      <child_model>delivery_package</child_model>
+      <child_link>package_link</child_link>
+      <detach_topic>/delivery/detach</detach_topic>
+    </plugin>
+
     <!-- ============ Joint State Publisher ============ -->
     <plugin filename="gz-sim-joint-state-publisher-system"
         name="gz::sim::systems::JointStatePublisher">

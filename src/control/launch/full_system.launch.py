@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Full system launch file for BoilerHawk.
-Launches perception (with mock planning) and control nodes together.
+Launches perception (with mock planning), control, and mission manager nodes together.
 """
 
 from launch import LaunchDescription
@@ -16,10 +16,12 @@ def generate_launch_description():
     # Get package directories
     planning_pkg_dir = get_package_share_directory('planning')
     control_pkg_dir = get_package_share_directory('control')
+    mission_pkg_dir = get_package_share_directory('mission_manager')
     
     # Path to config files
     planning_config = os.path.join(planning_pkg_dir, 'config', 'planning_params.yaml')
     control_config = os.path.join(control_pkg_dir, 'config', 'control_params.yaml')
+    mission_config = os.path.join(mission_pkg_dir, 'config', 'mission_params.yaml')
     
     # Mock perception node (generates test occupancy grids)
     mock_perception_node = Node(
@@ -57,8 +59,19 @@ def generate_launch_description():
         emulate_tty=True,
     )
     
+    # Mission Manager node (FSM orchestrator)
+    mission_manager_node = Node(
+        package='mission_manager',
+        executable='mission_manager_node',
+        name='mission_manager_node',
+        output='screen',
+        parameters=[mission_config],
+        emulate_tty=True,
+    )
+    
     return LaunchDescription([
         mock_perception_node,
         planning_node,
         control_node,
+        mission_manager_node,
     ])

@@ -14,11 +14,14 @@ those goals when ready.
 """
 
 import json
+import logging
+import os
 import time
 from typing import Any, Dict, Optional
 
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import OccupancyGrid, Path
@@ -34,6 +37,8 @@ from mission_manager.strategies.base_strategy import MissionStrategy
 from mission_manager.strategies.waypoint_survey import WaypointSurveyStrategy
 from mission_manager.strategies.search_and_rescue import SearchAndRescueStrategy
 from mission_manager.strategies.perimeter_patrol import PerimeterPatrolStrategy
+from mission_manager.strategies.maze_navigation import MazeNavigationStrategy
+from mission_manager.strategies.package_delivery import PackageDeliveryStrategy
 from mission_manager.utils.geo_utils import make_pose, distance_xy
 
 
@@ -44,6 +49,8 @@ STRATEGY_REGISTRY: Dict[str, type] = {
     "waypoint_survey": WaypointSurveyStrategy,
     "search_and_rescue": SearchAndRescueStrategy,
     "perimeter_patrol": PerimeterPatrolStrategy,
+    "maze_navigation": MazeNavigationStrategy,
+    "package_delivery": PackageDeliveryStrategy,
 }
 
 
@@ -52,6 +59,20 @@ class MissionManagerNode(Node):
 
     def __init__(self) -> None:
         super().__init__("mission_manager_node")
+
+        # File logger for debugging
+        log_dir = os.path.expanduser('~/BoilerHawk/BoilerHawk/logs')
+        os.makedirs(log_dir, exist_ok=True)
+        self.flog = logging.getLogger('bhawk.mission_manager')
+        self.flog.setLevel(logging.DEBUG)
+        if not self.flog.handlers:
+            fh = logging.FileHandler(
+                os.path.join(log_dir, 'mission_manager.log'), mode='w')
+            fh.setFormatter(logging.Formatter(
+                '%(asctime)s [%(levelname)s] %(message)s',
+                datefmt='%H:%M:%S'))
+            self.flog.addHandler(fh)
+        self.flog.info('=== Mission Manager node started ===')
 
         # ------------------------------------------------------------ #
         #  Parameters
@@ -65,6 +86,10 @@ class MissionManagerNode(Node):
         self.declare_parameter("rtl_x", 0.0)
         self.declare_parameter("rtl_y", 0.0)
         self.declare_parameter("frame_id", "map")
+        self.declare_parameter("strategy_name", "waypoint_survey")
+        self.declare_parameter("strategy_params", "{}")
+        self.declare_parameter("auto_start", False)
+        self.declare_parameter("auto_start_delay", 10.0)
 
         self._takeoff_alt = self.get_parameter("takeoff_altitude").value
         self._wp_threshold = self.get_parameter("waypoint_threshold").value
@@ -85,6 +110,7 @@ class MissionManagerNode(Node):
         self._last_control_stamp: float = 0.0
         self._last_pose_stamp: float = 0.0
         self._control_status_text: str = ""
+        self._path_complete_flag: bool = False
 
         # ------------------------------------------------------------ #
         #  Publishers
@@ -100,14 +126,24 @@ class MissionManagerNode(Node):
         # ------------------------------------------------------------ #
         #  Subscribers (generic — tolerant of missing upstream nodes)
         # ------------------------------------------------------------ #
+        # QoS profile matching MAVROS (BEST_EFFORT required)
+        mavros_qos = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            durability=DurabilityPolicy.VOLATILE,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=10
+        )
         self.create_subscription(
             String, "/control/status", self._control_status_cb, 10
         )
         self.create_subscription(
             PoseStamped,
-            "/mavlink/local_position/pose",
+            "/mavros/local_position/pose",
             self._pose_cb,
-            10,
+            mavros_qos,
+        )
+        self.create_subscription(
+            String, "/control/waypoint_reached", self._waypoint_reached_cb, 10
         )
 
         # ------------------------------------------------------------ #
@@ -136,6 +172,18 @@ class MissionManagerNode(Node):
         self._pending_strategy_name: Optional[str] = None
         self._pending_params: Dict[str, Any] = {}
 
+        # ------------------------------------------------------------ #
+        #  Auto-start (optional)
+        # ------------------------------------------------------------ #
+        if self.get_parameter("auto_start").value:
+            delay = self.get_parameter("auto_start_delay").value
+            self.get_logger().info(
+                f"Auto-start enabled — will load & start in {delay:.0f}s"
+            )
+            self._auto_start_timer = self.create_timer(
+                delay, self._auto_start_mission
+            )
+
         self.get_logger().info(
             "Mission Manager started — state: IDLE.  "
             f"Available strategies: {list(STRATEGY_REGISTRY.keys())}"
@@ -152,8 +200,59 @@ class MissionManagerNode(Node):
     def _pose_cb(self, msg: PoseStamped) -> None:
         self._current_pose = msg
         self._last_pose_stamp = time.monotonic()
+        # Log first pose received
+        if not hasattr(self, '_pose_logged'):
+            self.flog.info(f'First pose received: z={msg.pose.position.z:.2f}m')
+            self._pose_logged = True
+
+    def _waypoint_reached_cb(self, msg: String) -> None:
+        """React to path_complete from control to advance strategy goal."""
+        if msg.data == 'path_complete' and self._state == MissionState.EXECUTING:
+            self._path_complete_flag = True
 
     # ================================================================= #
+    #  Auto-start
+    # ================================================================= #
+
+    def _auto_start_mission(self) -> None:
+        """One-shot: load the configured strategy and start the mission."""
+        # Cancel so this only fires once
+        self._auto_start_timer.cancel()
+
+        if self._state != MissionState.IDLE:
+            self.get_logger().warn(
+                f"Auto-start skipped — already in {self._state.name}"
+            )
+            return
+
+        strat_name = (
+            self.get_parameter("strategy_name")
+            .get_parameter_value()
+            .string_value
+        )
+        params_json = (
+            self.get_parameter("strategy_params")
+            .get_parameter_value()
+            .string_value
+        )
+        try:
+            params = json.loads(params_json)
+        except json.JSONDecodeError as exc:
+            self.get_logger().error(f"Auto-start: bad strategy_params JSON: {exc}")
+            return
+
+        # Build a dummy response object to reuse _load_strategy
+        resp = SetBool.Response()
+        self._load_strategy(strat_name, params, resp)
+        if not resp.success:
+            self.get_logger().error(f"Auto-start load failed: {resp.message}")
+            return
+
+        self.get_logger().info(f"Auto-start: strategy '{strat_name}' loaded")
+        self._transition(MissionState.PREFLIGHT)
+        self.get_logger().info("Auto-start: mission started (PREFLIGHT)")
+
+    # ================================================================= # #
     #  FSM core
     # ================================================================= #
 
@@ -170,6 +269,7 @@ class MissionManagerNode(Node):
         old = self._state
         self._state = target
         self.get_logger().info(f"State: {old.name} → {target.name}")
+        self.flog.info(f'FSM: {old.name} -> {target.name}')
         self._publish_state()
         return True
 
@@ -241,15 +341,22 @@ class MissionManagerNode(Node):
         If we don't have pose data, we wait.
         """
         if self._current_pose is None:
+            self.flog.info('Takeoff: pose is None')
             self._publish_feedback("Takeoff: waiting for pose data")
             return
 
         alt = self._current_pose.pose.position.z
         target = self._takeoff_alt
-        if alt >= target * 0.85:
+        # Throttled altitude logging (every 2s)
+        now_ns = self.get_clock().now().nanoseconds
+        if not hasattr(self, '_last_takeoff_log') or (now_ns - self._last_takeoff_log) > 2_000_000_000:
+            self.flog.info(f'Takeoff check: alt={alt:.2f}m, need={target * 0.70:.2f}m (target={target:.2f}m)')
+            self._last_takeoff_log = now_ns
+        if alt >= target * 0.70:
             self.get_logger().info(
-                f"Takeoff complete (alt={alt:.2f}m ≥ {target * 0.85:.2f}m)"
+                f"Takeoff complete (alt={alt:.2f}m ≥ {target * 0.70:.2f}m)"
             )
+            self.flog.info(f'Takeoff complete: alt={alt:.2f}m')
             self._transition(MissionState.EXECUTING)
         else:
             self._publish_feedback(
@@ -263,12 +370,24 @@ class MissionManagerNode(Node):
             self._transition(MissionState.EMERGENCY)
             return
 
-        # Try to advance to next goal if we have pose data
+        # Advance strategy on every tick so time-based phases (dwell)
+        # can progress, plus on path_complete for position-based phases.
         if self._current_pose is not None:
-            self._strategy.advance(self._current_pose, self._wp_threshold)
+            changed = self._strategy.advance(self._current_pose, self._wp_threshold)
+            if changed:
+                progress = self._strategy.get_progress()
+                self.flog.info(f'Phase advanced: {progress}')
+        self._path_complete_flag = False
 
         # Update current goal
         self._current_goal = self._strategy.get_next_goal(self._current_pose)
+        if self._current_goal is not None:
+            g = self._current_goal.pose.position
+            # Throttled logging (every 5s)
+            now_ns = self.get_clock().now().nanoseconds
+            if not hasattr(self, '_last_goal_log') or (now_ns - self._last_goal_log) > 5_000_000_000:
+                self.flog.info(f'Goal: ({g.x:.1f}, {g.y:.1f}, {g.z:.1f})')
+                self._last_goal_log = now_ns
 
         # Check completion
         if self._strategy.is_complete():
@@ -374,9 +493,6 @@ class MissionManagerNode(Node):
             return response
 
         # Read strategy name/params from ROS parameters
-        self.declare_parameter("strategy_name", "waypoint_survey")
-        self.declare_parameter("strategy_params", "{}")
-
         strat_name = (
             self.get_parameter("strategy_name").get_parameter_value().string_value
         )
@@ -420,6 +536,15 @@ class MissionManagerNode(Node):
             return response
 
         self._strategy = strategy
+
+        # If it's a delivery strategy, inject the command publisher
+        if hasattr(strategy, 'set_delivery_publisher'):
+            if not hasattr(self, '_delivery_cmd_pub'):
+                self._delivery_cmd_pub = self.create_publisher(
+                    String, "/delivery/command", 10
+                )
+            strategy.set_delivery_publisher(self._delivery_cmd_pub)
+
         self.get_logger().info(f"Loaded strategy: {name}")
         response.success = True
         response.message = f"Strategy '{name}' loaded — call /mission/start"
@@ -559,6 +684,7 @@ class MissionManagerNode(Node):
             self._strategy.reset()
         self._strategy = None
         self._current_goal = None
+        self._path_complete_flag = False
 
 
 # =================================================================== #

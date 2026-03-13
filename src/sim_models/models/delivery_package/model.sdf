@@ -1,0 +1,107 @@
+<?xml version="1.0"?>
+<sdf version="1.9">
+  <model name="delivery_package">
+    <static>false</static>
+
+    <!-- Main package body -->
+    <link name="package_link">
+      <inertial>
+        <mass>0.2</mass>
+        <inertia>
+          <ixx>0.000117</ixx>
+          <ixy>0</ixy>
+          <ixz>0</ixz>
+          <iyy>0.000092</iyy>
+          <iyz>0</iyz>
+          <izz>0.000117</izz>
+        </inertia>
+      </inertial>
+
+      <!-- Main cardboard box -->
+      <visual name="box_visual">
+        <geometry>
+          <box><size>0.15 0.15 0.10</size></box>
+        </geometry>
+        <material>
+          <ambient>0.6 0.45 0.25 1</ambient>
+          <diffuse>0.7 0.5 0.3 1</diffuse>
+          <specular>0.1 0.1 0.1 1</specular>
+        </material>
+      </visual>
+
+      <!-- Tape stripe (top, dark brown) -->
+      <visual name="tape_top">
+        <pose>0 0 0.051 0 0 0</pose>
+        <geometry>
+          <box><size>0.15 0.03 0.002</size></box>
+        </geometry>
+        <material>
+          <ambient>0.35 0.2 0.08 1</ambient>
+          <diffuse>0.4 0.25 0.1 1</diffuse>
+        </material>
+      </visual>
+
+      <!-- Tape stripe (side, dark brown) -->
+      <visual name="tape_side_front">
+        <pose>0 0.076 0 0 0 0</pose>
+        <geometry>
+          <box><size>0.03 0.002 0.10</size></box>
+        </geometry>
+        <material>
+          <ambient>0.35 0.2 0.08 1</ambient>
+          <diffuse>0.4 0.25 0.1 1</diffuse>
+        </material>
+      </visual>
+
+      <!-- Label (white rectangle on side) -->
+      <visual name="label">
+        <pose>0 0.076 0.01 0 0 0</pose>
+        <geometry>
+          <box><size>0.08 0.001 0.05</size></box>
+        </geometry>
+        <material>
+          <ambient>0.9 0.9 0.9 1</ambient>
+          <diffuse>0.95 0.95 0.95 1</diffuse>
+        </material>
+      </visual>
+
+      <!-- "FRAGILE" marker (red rectangle on other side) -->
+      <visual name="fragile_marker">
+        <pose>0 -0.076 0.01 0 0 0</pose>
+        <geometry>
+          <box><size>0.06 0.001 0.03</size></box>
+        </geometry>
+        <material>
+          <ambient>0.8 0.15 0.1 1</ambient>
+          <diffuse>0.9 0.2 0.1 1</diffuse>
+        </material>
+      </visual>
+
+      <!-- BoilerHawk logo marker (gold rectangle on top) -->
+      <visual name="logo_marker">
+        <pose>0.04 0 0.051 0 0 0</pose>
+        <geometry>
+          <box><size>0.04 0.04 0.001</size></box>
+        </geometry>
+        <material>
+          <ambient>0.8 0.65 0.1 1</ambient>
+          <diffuse>0.9 0.75 0.15 1</diffuse>
+        </material>
+      </visual>
+
+      <collision name="collision">
+        <geometry>
+          <box><size>0.15 0.15 0.10</size></box>
+        </geometry>
+        <surface>
+          <friction>
+            <ode>
+              <mu>1.0</mu>
+              <mu2>1.0</mu2>
+            </ode>
+          </friction>
+        </surface>
+      </collision>
+    </link>
+  </model>
+</sdf>

@@ -27,6 +27,7 @@ setup(
     entry_points={
         'console_scripts': [
             'mission_manager_node = mission_manager.mission_manager_node:main',
+            'delivery_manager_node = mission_manager.delivery_manager_node:main',
         ],
     },
 )
