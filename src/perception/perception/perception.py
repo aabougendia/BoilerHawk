@@ -60,7 +60,7 @@ class PerceptionNode(Node):
         self.declare_parameter('cam_z_offset', 0.05)
         self.declare_parameter('min_obstacle_height', 0.5)
         self.declare_parameter('min_hits', 5)
-        self.declare_parameter('hit_increment', 3)
+        self.declare_parameter('hit_increment', 2)
         self.declare_parameter('hit_decay', 1)
 
         self.pointcloud_topic = str(
@@ -97,6 +97,8 @@ class PerceptionNode(Node):
         # Hit-count grid: each cell counts how many frames confirm it.
         # Only cells with >= min_hits become occupied. This prevents
         # single-frame noise from permanently polluting the grid.
+        # Once a cell reaches min_hits it becomes a permanent obstacle
+        # and is never decayed — walls don't move.
         self.hit_count = np.zeros(
             (self.grid_h, self.grid_w), dtype=np.int16)
 

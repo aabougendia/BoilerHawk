@@ -311,7 +311,7 @@ Converts raw depth camera point clouds into an occupancy grid for the planner.
 | `cam_z_offset` | `0.05` | Camera mount height offset |
 | `min_obstacle_height` | `0.5` | Points below this world-Z are filtered as ground |
 | `min_hits` | `5` | Frame-detection count required to mark a cell occupied |
-| `hit_increment` | `3` | Score added per frame to each newly-detected cell |
+| `hit_increment` | `2` | Score added per frame to each newly-detected cell |
 | `hit_decay` | `1` | Score subtracted from every cell every frame |
 
 **Processing pipeline:**
@@ -714,7 +714,7 @@ Several design decisions required balancing competing constraints:
 | Decision | Trade-off | Rationale |
 |----------|-----------|-----------|
 | 0.2 m grid resolution | Finer resolution detects smaller gaps but increases A\* computation | 0.2 m is ≈ 2× the airframe radius — sufficient for clearance without excessive cost |
-| 0.6 m inflation radius | Larger margin is safer but may close off valid passages | Bumped from 0.4 m after diagonal grazing incidents; still keeps 3.5 m maze gaps navigable with adequate clearance || Decay-based hit counting with permanent obstacles | Aggressive decay may drop real obstacles; no decay lets noise accumulate | Increment 3 / decay 1 means a cell seen 2+ consecutive frames becomes occupied, while single-frame noise fades in 3 frames. Once a cell reaches `min_hits` it is **never decayed**, preventing confirmed walls from disappearing when outside the camera FOV || Physics step = 1 ms | Smaller steps improve accuracy but reduce real-time factor | ArduPilot requires ≥ 400 Hz main loop; 1 ms was the maximum step that maintained stable flight |
+| 0.6 m inflation radius | Larger margin is safer but may close off valid passages | Bumped from 0.4 m after diagonal grazing incidents; still keeps 3.5 m maze gaps navigable with adequate clearance || Decay-based hit counting with permanent obstacles | Aggressive decay may drop real obstacles; no decay lets noise accumulate | Increment 2 / decay 1 means a cell seen 3+ consecutive frames becomes occupied, while single-frame noise fades in 2 frames. Once a cell reaches `min_hits` it is **never decayed**, preventing confirmed walls from disappearing when outside the camera FOV || Physics step = 1 ms | Smaller steps improve accuracy but reduce real-time factor | ArduPilot requires ≥ 400 Hz main loop; 1 ms was the maximum step that maintained stable flight |
 | Straight-line global path | Simpler than full global A\* but doesn't pre-plan around distant obstacles | Acceptable because the drone replans locally as it approaches each obstacle; a global planner would need a pre-built map that doesn't exist |
 | 5 s replan cooldown | Prevents oscillation but delays reaction to new obstacles | Balances stability against responsiveness; at 2 m/s cruise the drone covers 10 m between replans, within sensor range |
 

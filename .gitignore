@@ -6,3 +6,11 @@ __pycache__/
 
 # Node log files
 logs/
+
+
+# MAVLink / autopilot artifacts
+eeprom.bin
+mav.parm
+mav.tlog
+mav.tlog.raw
+LASTLOG.TXT

@@ -245,7 +245,7 @@ def generate_launch_description():
             #   detected cells gain hit_increment (capped per-frame).
             #   Need min_hits to mark occupied.
             {'min_hits': 5},
-            {'hit_increment': 3},
+            {'hit_increment': 2},
             {'hit_decay': 1},
         ],
         output='screen',

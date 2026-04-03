@@ -231,7 +231,7 @@ def generate_launch_description():
             {'occupancy_topic': '/occupancy_grid'},
             {'pose_topic': '/mavros/local_position/pose'},
             {'resolution': 0.25},
-            {'max_range': 8.0},
+            {'max_range': 5.0},
             {'inflate_radius': 0.4},
             {'grid_frame': 'map'},
             # Grid covers delivery world area (0,0) to (25,25) with margin
@@ -245,7 +245,7 @@ def generate_launch_description():
             {'min_obstacle_height': 0.5},
             # Hit-based detection
             {'min_hits': 5},
-            {'hit_increment': 3},
+            {'hit_increment': 2},
             {'hit_decay': 1},
         ],
         output='screen',
