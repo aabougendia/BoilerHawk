@@ -73,6 +73,27 @@ class MissionStrategy(ABC):
         """Called when the mission is resumed.  Override if needed."""
 
     # ------------------------------------------------------------------ #
+    #  Completion behaviour
+    # ------------------------------------------------------------------ #
+
+    def should_rtl_on_complete(self) -> bool:
+        """Return ``True`` if the drone should RTL after the mission.
+
+        Override to ``False`` in strategies (e.g. delivery) where the
+        drone should land in-place instead of returning to launch.
+        """
+        return True
+
+    def get_landing_position(self) -> Optional[PoseStamped]:
+        """Return a custom landing position, or ``None`` for default.
+
+        When :meth:`should_rtl_on_complete` returns ``False``, the
+        mission manager will use this position (if provided) as the
+        landing goal.  Return ``None`` to land at the current position.
+        """
+        return None
+
+    # ------------------------------------------------------------------ #
     #  Reporting
     # ------------------------------------------------------------------ #
 

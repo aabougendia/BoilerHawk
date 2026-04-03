@@ -11,7 +11,7 @@ message.
 
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import Bool, String
+from std_msgs.msg import Empty, String
 
 
 class DeliveryManagerNode(Node):
@@ -25,9 +25,8 @@ class DeliveryManagerNode(Node):
             String, "/delivery/command", self._command_cb, 10
         )
 
-        # Publish to the bridged Gazebo topic (Bool → gz.msgs.Boolean)
-        # The ros_gz_bridge maps /delivery/detach Bool ↔ gz.msgs.Boolean
-        self._detach_pub = self.create_publisher(Bool, "/delivery/detach", 10)
+        # Publish to the bridged Gazebo topic — DetachableJoint expects gz.msgs.Empty
+        self._detach_pub = self.create_publisher(Empty, "/delivery/detach", 10)
 
         self._attached = True
         self.get_logger().info("Delivery Manager started — package attached")
@@ -36,9 +35,7 @@ class DeliveryManagerNode(Node):
         cmd = msg.data.strip().lower()
 
         if cmd == "detach" and self._attached:
-            detach_msg = Bool()
-            detach_msg.data = True
-            self._detach_pub.publish(detach_msg)
+            self._detach_pub.publish(Empty())
             self._attached = False
             self.get_logger().info("Package DETACHED")
 

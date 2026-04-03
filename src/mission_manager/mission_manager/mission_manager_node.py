@@ -105,6 +105,7 @@ class MissionManagerNode(Node):
         self._strategy: Optional[MissionStrategy] = None
         self._current_pose: Optional[PoseStamped] = None
         self._current_goal: Optional[PoseStamped] = None
+        self._landing_position: Optional[PoseStamped] = None
 
         # Health-check timestamps (seconds, monotonic)
         self._last_control_stamp: float = 0.0
@@ -394,8 +395,26 @@ class MissionManagerNode(Node):
             self.get_logger().info(
                 f"Mission complete — {self._strategy.get_progress()}"
             )
-            self._publish_feedback("Mission complete — returning to launch")
-            self._transition(MissionState.RTL)
+            if self._strategy.should_rtl_on_complete():
+                self._publish_feedback("Mission complete — returning to launch")
+                self._transition(MissionState.RTL)
+            else:
+                # Land in-place (e.g. package delivery: land at dropoff)
+                landing_pos = self._strategy.get_landing_position()
+                if landing_pos is not None:
+                    self._landing_position = landing_pos
+                elif self._current_pose is not None:
+                    # Fall back to current position
+                    self._landing_position = make_pose(
+                        self._current_pose.pose.position.x,
+                        self._current_pose.pose.position.y,
+                        0.0,
+                        self._frame_id,
+                    )
+                else:
+                    self._landing_position = None
+                self._publish_feedback("Mission complete — landing at destination")
+                self._transition(MissionState.LANDING)
             return
 
         self._publish_feedback(self._strategy.get_progress())
@@ -423,10 +442,21 @@ class MissionManagerNode(Node):
         Landing is ultimately handled by the control node / ArduPilot.
         We set the goal altitude to 0 and wait for alt < 0.3 m, then
         go back to IDLE.
+
+        If ``_landing_position`` is set (by a non-RTL strategy), land
+        there instead of the RTL home position.
         """
-        land_goal = make_pose(
-            self._rtl_x, self._rtl_y, 0.0, self._frame_id
-        )
+        if self._landing_position is not None:
+            land_goal = make_pose(
+                self._landing_position.pose.position.x,
+                self._landing_position.pose.position.y,
+                0.0,
+                self._frame_id,
+            )
+        else:
+            land_goal = make_pose(
+                self._rtl_x, self._rtl_y, 0.0, self._frame_id
+            )
         self._current_goal = land_goal
 
         if self._current_pose is not None:
@@ -684,6 +714,7 @@ class MissionManagerNode(Node):
             self._strategy.reset()
         self._strategy = None
         self._current_goal = None
+        self._landing_position = None
         self._path_complete_flag = False
 
 

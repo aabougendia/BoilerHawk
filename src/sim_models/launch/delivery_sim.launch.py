@@ -168,7 +168,8 @@ def generate_launch_description():
         package='ros_gz_bridge',
         executable='parameter_bridge',
         arguments=[
-            '/delivery/detach@std_msgs/msg/Bool@gz.msgs.Boolean',
+            # DetachableJoint subscribes with gz.msgs.Empty (not Boolean)
+            '/delivery/detach@std_msgs/msg/Empty@gz.msgs.Empty',
         ],
         output='screen',
     )

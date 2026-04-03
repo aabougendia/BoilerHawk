@@ -73,6 +73,7 @@ class PlanningNode(Node):
         self.grid_ready = False
         self._replan_cooldown_ns = 2_000_000_000  # 2 s
         self._last_replan_time = None
+        self._last_closest = 0     # monotonic index into global_path
 
         # Subscribers
         self.create_subscription(
@@ -114,6 +115,7 @@ class PlanningNode(Node):
         self.flog.info(
             f'Mission goal updated: ({self.goal_x:.1f}, {self.goal_y:.1f})')
         # Replan immediately from current position
+        self._last_closest = 0
         if self.grid_ready:
             cx, cy = self.current_pos or (self.start_x, self.start_y)
             self._plan_from(cx, cy)
@@ -144,6 +146,7 @@ class PlanningNode(Node):
         if result:
             self.global_path = [
                 self.planner.grid_to_world(c) for c in result]
+            self._last_closest = 0  # reset after replan
             self._publish(self.global_path, self.global_pub)
             path_msg = f'Path: {len(self.global_path)} waypoints from ({sx:.1f},{sy:.1f})'
             self.get_logger().info(path_msg)
@@ -159,12 +162,18 @@ class PlanningNode(Node):
 
         cx, cy = self.current_pos or (self.start_x, self.start_y)
 
-        # Find closest waypoint
+        # Find closest waypoint — search forward only from _last_closest
+        # to avoid snapping backward when A* paths loop around obstacles.
+        search_start = max(0, self._last_closest)
+        search_end = len(self.global_path)
+        if search_start >= search_end:
+            search_start = 0  # safety fallback
         closest = min(
-            range(len(self.global_path)),
+            range(search_start, search_end),
             key=lambda i: math.hypot(
                 self.global_path[i][0] - cx,
                 self.global_path[i][1] - cy))
+        self._last_closest = closest
 
         # Check waypoints AHEAD for obstacles
         blocked = False
@@ -191,6 +200,7 @@ class PlanningNode(Node):
                         key=lambda i: math.hypot(
                             self.global_path[i][0] - cx,
                             self.global_path[i][1] - cy))
+                    self._last_closest = closest
 
         # Local path = upcoming waypoint window
         end = min(closest + self.lookahead, len(self.global_path))

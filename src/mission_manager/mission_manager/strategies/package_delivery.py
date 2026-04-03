@@ -170,6 +170,14 @@ class PackageDeliveryStrategy(MissionStrategy):
     def is_complete(self) -> bool:
         return self._phase == _Phase.COMPLETE
 
+    def should_rtl_on_complete(self) -> bool:
+        """Delivery missions land at the dropoff — no RTL."""
+        return False
+
+    def get_landing_position(self) -> Optional[PoseStamped]:
+        """Land at the dropoff site."""
+        return self._dropoff_low
+
     # ------------------------------------------------------------------ #
     #  Reporting
     # ------------------------------------------------------------------ #
