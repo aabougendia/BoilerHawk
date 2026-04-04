@@ -24,6 +24,7 @@ setup(
         'console_scripts': [
             'perception_node = perception.perception:main',
             'mock_pointcloud_publisher = perception.mock_pointcloud_publisher:main',
+            'human_detector_node = perception.human_detector:main',
         ],
     },
 )

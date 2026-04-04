@@ -3,9 +3,13 @@
 Copyright 2026 BoilerHawk — MIT License.
 
 Generates an expanding-square search pattern from a given centre point.
-Future versions can hook into a perception callback to react to detections.
+When a human is detected the drone pauses the search, approaches the
+detection site, hovers briefly, then resumes the pattern or returns
+home when the maximum detection count is reached.
 """
 
+import time
+from enum import Enum, auto
 from typing import Any, Dict, Optional
 
 from geometry_msgs.msg import PoseStamped
@@ -18,8 +22,14 @@ from mission_manager.utils.geo_utils import (
 )
 
 
+class _Phase(Enum):
+    SEARCHING = auto()
+    APPROACHING = auto()
+    HOVERING = auto()
+
+
 class SearchAndRescueStrategy(MissionStrategy):
-    """Expanding-square search pattern for search-and-rescue missions."""
+    """Expanding-square search with human-detection reaction."""
 
     name = "search_and_rescue"
 
@@ -28,6 +38,11 @@ class SearchAndRescueStrategy(MissionStrategy):
         self._current_idx: int = 0
         self._altitude: float = 2.0
         self._detections: list = []
+        self._phase = _Phase.SEARCHING
+        self._approach_target: Optional[PoseStamped] = None
+        self._hover_start: Optional[float] = None
+        self._hover_duration: float = 5.0
+        self._max_detections: int = 5
 
     # ------------------------------------------------------------------ #
     #  Lifecycle
@@ -44,9 +59,14 @@ class SearchAndRescueStrategy(MissionStrategy):
             leg_increment   (float, default 2.0 m)
             num_legs        (int,   default 16)
             frame_id        (str,   default "map")
+            hover_duration  (float, default 5.0 s)
+            max_detections  (int,   default 5)
             waypoints       (list of [x,y] — override pattern)
         """
         self.reset()
+
+        self._hover_duration = float(params.get("hover_duration", 5.0))
+        self._max_detections = int(params.get("max_detections", 5))
 
         # Allow raw waypoint override
         raw_wps = params.get("waypoints")
@@ -84,6 +104,9 @@ class SearchAndRescueStrategy(MissionStrategy):
         self._waypoints = []
         self._current_idx = 0
         self._detections = []
+        self._phase = _Phase.SEARCHING
+        self._approach_target = None
+        self._hover_start = None
 
     # ------------------------------------------------------------------ #
     #  Goal generation
@@ -92,6 +115,9 @@ class SearchAndRescueStrategy(MissionStrategy):
     def get_next_goal(
         self, current_pose: Optional[PoseStamped]
     ) -> Optional[PoseStamped]:
+        if self._phase in (_Phase.APPROACHING, _Phase.HOVERING):
+            return self._approach_target
+        # SEARCHING
         if self.is_complete():
             return None
         return self._waypoints[self._current_idx]
@@ -99,6 +125,32 @@ class SearchAndRescueStrategy(MissionStrategy):
     def advance(self, current_pose: PoseStamped, threshold: float) -> bool:
         if self.is_complete():
             return False
+
+        # --- APPROACHING: fly toward detection site ---
+        if self._phase == _Phase.APPROACHING:
+            if (self._approach_target is not None
+                    and distance_xy(current_pose, self._approach_target)
+                    < threshold):
+                self._phase = _Phase.HOVERING
+                self._hover_start = time.monotonic()
+                return True
+            return False
+
+        # --- HOVERING: dwell over detection site ---
+        if self._phase == _Phase.HOVERING:
+            if (self._hover_start is not None
+                    and (time.monotonic() - self._hover_start)
+                    >= self._hover_duration):
+                if len(self._detections) >= self._max_detections:
+                    self._current_idx = len(self._waypoints)
+                else:
+                    self._phase = _Phase.SEARCHING
+                self._approach_target = None
+                self._hover_start = None
+                return True
+            return False
+
+        # --- SEARCHING: normal waypoint traversal ---
         goal = self._waypoints[self._current_idx]
         if distance_xy(current_pose, goal) < threshold:
             self._current_idx += 1
@@ -113,15 +165,25 @@ class SearchAndRescueStrategy(MissionStrategy):
     # ------------------------------------------------------------------ #
 
     def on_detection(self, detection_pose: PoseStamped, label: str = "") -> None:
-        """Record a detection from perception.
+        """React to a human detection from the detector node.
 
-        Future: could pause mission, loiter, or mark and continue.
+        Records the detection and interrupts the search to approach
+        the detection site and hover.
         """
+        if self._phase in (_Phase.APPROACHING, _Phase.HOVERING):
+            return
+
         self._detections.append({
             "pose": detection_pose,
             "label": label,
             "at_wp": self._current_idx,
         })
+
+        p = detection_pose.pose.position
+        self._approach_target = make_pose(
+            p.x, p.y, self._altitude,
+            detection_pose.header.frame_id or "map")
+        self._phase = _Phase.APPROACHING
 
     # ------------------------------------------------------------------ #
     #  Reporting
@@ -134,11 +196,13 @@ class SearchAndRescueStrategy(MissionStrategy):
         done = min(self._current_idx, total)
         pct = int(done / total * 100)
         det = len(self._detections)
-        return f"Search {done}/{total} ({pct}%), detections: {det}"
+        phase = self._phase.name.lower()
+        return f"Search {done}/{total} ({pct}%), detections: {det}, {phase}"
 
     def get_status_dict(self) -> Dict[str, Any]:
         base = super().get_status_dict()
         base["current_wp"] = self._current_idx
         base["total_wps"] = len(self._waypoints)
         base["detections"] = len(self._detections)
+        base["phase"] = self._phase.name
         return base

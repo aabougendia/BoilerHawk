@@ -66,6 +66,23 @@ if [ "$1" = "delivery" ]; then
     echo "========================================="
     echo ""
     ros2 launch sim_models delivery_sim.launch.py "$@"
+elif [ "$1" = "rescue" ]; then
+    shift  # remove 'rescue' from args
+    echo "  MODE: Search & Rescue"
+    echo ""
+    echo "This will start:"
+    echo "  • Gazebo Harmonic  (rescue world + iris drone + victims)"
+    echo "  • ArduPilot SITL   (2 s delay)"
+    echo "  • MAVROS            (25 s delay — waits for SITL TCP port)"
+    echo "  • Perception + Planning + Control nodes"
+    echo "  • Human Detector   (YOLOv8n on depth camera)"
+    echo "  • Mission Manager  (search_and_rescue strategy)"
+    echo "  • RViz              (5 s delay)"
+    echo ""
+    echo "Ctrl+C to stop everything."
+    echo "========================================="
+    echo ""
+    ros2 launch sim_models rescue_sim.launch.py "$@"
 else
     echo "  MODE: Default (outdoor world)"
     echo ""

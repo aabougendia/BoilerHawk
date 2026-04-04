@@ -146,6 +146,9 @@ class MissionManagerNode(Node):
         self.create_subscription(
             String, "/control/waypoint_reached", self._waypoint_reached_cb, 10
         )
+        self.create_subscription(
+            PoseStamped, "/detection/pose", self._detection_cb, 10
+        )
 
         # ------------------------------------------------------------ #
         #  Services
@@ -210,6 +213,18 @@ class MissionManagerNode(Node):
         """React to path_complete from control to advance strategy goal."""
         if msg.data == 'path_complete' and self._state == MissionState.EXECUTING:
             self._path_complete_flag = True
+
+    def _detection_cb(self, msg: PoseStamped) -> None:
+        """Forward person detection to the active strategy."""
+        if (self._state == MissionState.EXECUTING
+                and self._strategy is not None
+                and hasattr(self._strategy, 'on_detection')):
+            self._strategy.on_detection(msg, label="person")
+            p = msg.pose.position
+            self.get_logger().info(
+                f'Detection forwarded to strategy at ({p.x:.1f}, {p.y:.1f})')
+            self.flog.info(
+                f'Detection forwarded at ({p.x:.1f}, {p.y:.1f})')
 
     # ================================================================= #
     #  Auto-start

@@ -1,0 +1,328 @@
+<?xml version="1.0" ?>
+<sdf version="1.9">
+  <world name="rescue_world">
+    <!-- Physics settings optimized for drone flight -->
+    <physics name="1ms" type="ignore">
+      <max_step_size>0.001</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+    </physics>
+
+    <!-- Essential Gazebo plugins -->
+    <plugin
+      filename="gz-sim-physics-system"
+      name="gz::sim::systems::Physics">
+    </plugin>
+    <plugin
+      filename="gz-sim-user-commands-system"
+      name="gz::sim::systems::UserCommands">
+    </plugin>
+    <plugin
+      filename="gz-sim-scene-broadcaster-system"
+      name="gz::sim::systems::SceneBroadcaster">
+    </plugin>
+    <plugin
+      filename="gz-sim-sensors-system"
+      name="gz::sim::systems::Sensors">
+      <render_engine>ogre2</render_engine>
+    </plugin>
+    <plugin
+      filename="gz-sim-imu-system"
+      name="gz::sim::systems::Imu">
+    </plugin>
+    <plugin
+      filename="gz-sim-navsat-system"
+      name="gz::sim::systems::NavSat">
+    </plugin>
+
+    <!-- Spherical coordinates (required for ArduPilot GPS) -->
+    <spherical_coordinates>
+      <latitude_deg>-35.363262</latitude_deg>
+      <longitude_deg>149.165237</longitude_deg>
+      <elevation>584</elevation>
+      <heading_deg>0</heading_deg>
+      <surface_model>EARTH_WGS84</surface_model>
+    </spherical_coordinates>
+
+    <!-- Directional light (shadows disabled for performance) -->
+    <light type="directional" name="sun">
+      <cast_shadows>false</cast_shadows>
+      <pose>0 0 10 0 0 0</pose>
+      <diffuse>0.8 0.8 0.8 1</diffuse>
+      <specular>0.2 0.2 0.2 1</specular>
+      <direction>-0.5 0.1 -0.9</direction>
+    </light>
+
+    <scene>
+      <ambient>0.6 0.6 0.6 1</ambient>
+      <background>0.66 0.78 0.9 1</background>
+      <shadows>false</shadows>
+      <grid>true</grid>
+    </scene>
+
+    <!-- ===== Ground plane ===== -->
+    <model name="ground_plane">
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry><plane><normal>0 0 1</normal><size>100 100</size></plane></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><plane><normal>0 0 1</normal><size>100 100</size></plane></geometry>
+          <material>
+            <ambient>0.45 0.5 0.4 1</ambient>
+            <diffuse>0.45 0.5 0.4 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ===== Search area marker — 20×20m square boundary ===== -->
+    <!-- Centre of search area at (10, 10), drone starts at (0, 0) -->
+
+    <!-- Boundary posts (yellow pylons at corners of the 20×20 search grid) -->
+    <model name="corner_nw">
+      <static>true</static>
+      <pose>0 20 0.5 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry><cylinder><radius>0.15</radius><length>1.0</length></cylinder></geometry>
+          <material><ambient>0.9 0.8 0.0 1</ambient><diffuse>0.9 0.8 0.0 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+    <model name="corner_ne">
+      <static>true</static>
+      <pose>20 20 0.5 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry><cylinder><radius>0.15</radius><length>1.0</length></cylinder></geometry>
+          <material><ambient>0.9 0.8 0.0 1</ambient><diffuse>0.9 0.8 0.0 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+    <model name="corner_se">
+      <static>true</static>
+      <pose>20 0 0.5 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry><cylinder><radius>0.15</radius><length>1.0</length></cylinder></geometry>
+          <material><ambient>0.9 0.8 0.0 1</ambient><diffuse>0.9 0.8 0.0 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+    <model name="corner_sw">
+      <static>true</static>
+      <pose>0 0 0.5 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry><cylinder><radius>0.15</radius><length>1.0</length></cylinder></geometry>
+          <material><ambient>0.9 0.8 0.0 1</ambient><diffuse>0.9 0.8 0.0 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ===== "Victims" — standing human-shaped models ===== -->
+    <!--
+         Each victim is a capsule-like figure: torso cylinder + head sphere.
+         Bright clothing colours help YOLOv8 detection from altitude.
+         3 victims scattered across the 20×20m search area.
+    -->
+
+    <!-- Victim 1 — red jacket, at (6, 14) -->
+    <model name="victim_1">
+      <static>true</static>
+      <pose>6 14 0 0 0 0</pose>
+      <link name="body">
+        <!-- Torso -->
+        <visual name="torso">
+          <pose>0 0 0.6 0 0 0</pose>
+          <geometry><cylinder><radius>0.2</radius><length>0.8</length></cylinder></geometry>
+          <material><ambient>0.8 0.1 0.1 1</ambient><diffuse>0.9 0.15 0.1 1</diffuse></material>
+        </visual>
+        <!-- Legs -->
+        <visual name="legs">
+          <pose>0 0 0.15 0 0 0</pose>
+          <geometry><cylinder><radius>0.15</radius><length>0.3</length></cylinder></geometry>
+          <material><ambient>0.2 0.2 0.3 1</ambient><diffuse>0.25 0.25 0.35 1</diffuse></material>
+        </visual>
+        <!-- Head -->
+        <visual name="head">
+          <pose>0 0 1.1 0 0 0</pose>
+          <geometry><sphere><radius>0.12</radius></sphere></geometry>
+          <material><ambient>0.8 0.6 0.5 1</ambient><diffuse>0.85 0.65 0.55 1</diffuse></material>
+        </visual>
+        <!-- Arms (horizontal spread) -->
+        <visual name="left_arm">
+          <pose>0.35 0 0.7 0 1.57 0</pose>
+          <geometry><cylinder><radius>0.06</radius><length>0.5</length></cylinder></geometry>
+          <material><ambient>0.8 0.1 0.1 1</ambient><diffuse>0.9 0.15 0.1 1</diffuse></material>
+        </visual>
+        <visual name="right_arm">
+          <pose>-0.35 0 0.7 0 1.57 0</pose>
+          <geometry><cylinder><radius>0.06</radius><length>0.5</length></cylinder></geometry>
+          <material><ambient>0.8 0.1 0.1 1</ambient><diffuse>0.9 0.15 0.1 1</diffuse></material>
+        </visual>
+        <collision name="collision">
+          <pose>0 0 0.6 0 0 0</pose>
+          <geometry><cylinder><radius>0.25</radius><length>1.2</length></cylinder></geometry>
+        </collision>
+      </link>
+    </model>
+
+    <!-- Victim 2 — orange vest, at (15, 7) -->
+    <model name="victim_2">
+      <static>true</static>
+      <pose>15 7 0 0 0 0.3</pose>
+      <link name="body">
+        <visual name="torso">
+          <pose>0 0 0.55 0 0 0</pose>
+          <geometry><cylinder><radius>0.18</radius><length>0.7</length></cylinder></geometry>
+          <material><ambient>1.0 0.5 0.0 1</ambient><diffuse>1.0 0.6 0.05 1</diffuse></material>
+        </visual>
+        <visual name="legs">
+          <pose>0 0 0.15 0 0 0</pose>
+          <geometry><cylinder><radius>0.13</radius><length>0.3</length></cylinder></geometry>
+          <material><ambient>0.2 0.2 0.3 1</ambient><diffuse>0.25 0.25 0.35 1</diffuse></material>
+        </visual>
+        <visual name="head">
+          <pose>0 0 1.0 0 0 0</pose>
+          <geometry><sphere><radius>0.11</radius></sphere></geometry>
+          <material><ambient>0.7 0.55 0.4 1</ambient><diffuse>0.8 0.6 0.5 1</diffuse></material>
+        </visual>
+        <visual name="left_arm">
+          <pose>0.3 0 0.6 0 1.57 0</pose>
+          <geometry><cylinder><radius>0.05</radius><length>0.45</length></cylinder></geometry>
+          <material><ambient>1.0 0.5 0.0 1</ambient><diffuse>1.0 0.6 0.05 1</diffuse></material>
+        </visual>
+        <visual name="right_arm">
+          <pose>-0.3 0 0.6 0 1.57 0</pose>
+          <geometry><cylinder><radius>0.05</radius><length>0.45</length></cylinder></geometry>
+          <material><ambient>1.0 0.5 0.0 1</ambient><diffuse>1.0 0.6 0.05 1</diffuse></material>
+        </visual>
+        <collision name="collision">
+          <pose>0 0 0.55 0 0 0</pose>
+          <geometry><cylinder><radius>0.22</radius><length>1.1</length></cylinder></geometry>
+        </collision>
+      </link>
+    </model>
+
+    <!-- Victim 3 — blue shirt, at (12, 17), lying pose (rotated) -->
+    <model name="victim_3">
+      <static>true</static>
+      <pose>12 17 0 1.57 0 0.8</pose>
+      <link name="body">
+        <visual name="torso">
+          <pose>0 0 0.55 0 0 0</pose>
+          <geometry><cylinder><radius>0.2</radius><length>0.75</length></cylinder></geometry>
+          <material><ambient>0.1 0.3 0.8 1</ambient><diffuse>0.15 0.35 0.9 1</diffuse></material>
+        </visual>
+        <visual name="legs">
+          <pose>0 0 0.12 0 0 0</pose>
+          <geometry><cylinder><radius>0.14</radius><length>0.25</length></cylinder></geometry>
+          <material><ambient>0.3 0.3 0.3 1</ambient><diffuse>0.35 0.35 0.35 1</diffuse></material>
+        </visual>
+        <visual name="head">
+          <pose>0 0 1.05 0 0 0</pose>
+          <geometry><sphere><radius>0.12</radius></sphere></geometry>
+          <material><ambient>0.75 0.55 0.45 1</ambient><diffuse>0.8 0.6 0.5 1</diffuse></material>
+        </visual>
+        <collision name="collision">
+          <pose>0 0 0.55 0 0 0</pose>
+          <geometry><cylinder><radius>0.25</radius><length>1.1</length></cylinder></geometry>
+        </collision>
+      </link>
+    </model>
+
+    <!-- ===== Obstacles / debris in search area ===== -->
+
+    <!-- Collapsed wall at (4, 8) -->
+    <model name="debris_wall">
+      <static>true</static>
+      <pose>4 8 0.4 0 0 0.4</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry><box><size>3.0 0.3 0.8</size></box></geometry>
+          <material><ambient>0.5 0.5 0.5 1</ambient><diffuse>0.55 0.55 0.55 1</diffuse></material>
+        </visual>
+        <collision name="collision">
+          <geometry><box><size>3.0 0.3 0.8</size></box></geometry>
+        </collision>
+      </link>
+    </model>
+
+    <!-- Rubble pile at (10, 5) -->
+    <model name="rubble_1">
+      <static>true</static>
+      <pose>10 5 0.5 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry><box><size>2.0 2.0 1.0</size></box></geometry>
+          <material><ambient>0.45 0.4 0.35 1</ambient><diffuse>0.55 0.5 0.4 1</diffuse></material>
+        </visual>
+        <collision name="collision">
+          <geometry><box><size>2.0 2.0 1.0</size></box></geometry>
+        </collision>
+      </link>
+    </model>
+
+    <!-- Damaged structure at (17, 13) -->
+    <model name="damaged_building">
+      <static>true</static>
+      <pose>17 13 1.0 0 0.1 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry><box><size>2.5 2.0 2.0</size></box></geometry>
+          <material><ambient>0.55 0.45 0.35 1</ambient><diffuse>0.6 0.5 0.4 1</diffuse></material>
+        </visual>
+        <collision name="collision">
+          <geometry><box><size>2.5 2.0 2.0</size></box></geometry>
+        </collision>
+      </link>
+    </model>
+
+    <!-- Rubble pile at (8, 16) -->
+    <model name="rubble_2">
+      <static>true</static>
+      <pose>8 16 0.3 0 0 0.6</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry><box><size>1.5 1.5 0.6</size></box></geometry>
+          <material><ambient>0.5 0.45 0.4 1</ambient><diffuse>0.55 0.5 0.45 1</diffuse></material>
+        </visual>
+        <collision name="collision">
+          <geometry><box><size>1.5 1.5 0.6</size></box></geometry>
+        </collision>
+      </link>
+    </model>
+
+    <!-- ===== Tree (surviving, for variety) at (3, 18) ===== -->
+    <model name="tree_1">
+      <static>true</static>
+      <pose>3 18 0 0 0 0</pose>
+      <link name="trunk">
+        <visual name="trunk_visual">
+          <pose>0 0 1.0 0 0 0</pose>
+          <geometry><cylinder><radius>0.15</radius><length>2.0</length></cylinder></geometry>
+          <material><ambient>0.4 0.25 0.1 1</ambient><diffuse>0.5 0.3 0.15 1</diffuse></material>
+        </visual>
+        <collision name="trunk_collision">
+          <pose>0 0 1.0 0 0 0</pose>
+          <geometry><cylinder><radius>0.15</radius><length>2.0</length></cylinder></geometry>
+        </collision>
+        <visual name="canopy_visual">
+          <pose>0 0 2.5 0 0 0</pose>
+          <geometry><sphere><radius>1.0</radius></sphere></geometry>
+          <material><ambient>0.1 0.5 0.1 1</ambient><diffuse>0.15 0.6 0.15 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ===== Iris Quadcopter with depth camera ===== -->
+    <include>
+      <name>iris_drone</name>
+      <uri>model://iris_with_depth_cam</uri>
+      <pose>0 0 0.194 0 0 0</pose>
+    </include>
+
+  </world>
+</sdf>
