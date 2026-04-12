@@ -156,7 +156,7 @@ class HumanDetectorNode(Node):
     # ------------------------------------------------------------------ #
 
     def _detect_tick(self) -> None:
-        if self._latest_rgb is None or not self._have_pose:
+        if self._latest_rgb is None:
             return
 
         # Convert ROS Image to OpenCV BGR
@@ -193,7 +193,8 @@ class HumanDetectorNode(Node):
             self._det_info_pub.publish(info_msg)
 
             if (self._consec_count >= self._consec_required
-                    and not self._detection_published):
+                    and not self._detection_published
+                    and self._have_pose):
                 # Compute world-frame position of the detected person
                 pose = self._bbox_to_world_pose(best_person)
                 if pose is not None:
@@ -205,6 +206,9 @@ class HumanDetectorNode(Node):
                         f'conf={best_conf:.2f}')
         else:
             self._consec_count = 0
+
+        # --- Live debug window ---
+        self._show_debug_window(cv_img, results)
 
     # ------------------------------------------------------------------ #
     #  Pixel → world coordinate
@@ -315,6 +319,42 @@ class HumanDetectorNode(Node):
         except Exception:
             pass
 
+    def _show_debug_window(self, cv_img, results) -> None:
+        """Show live camera feed with YOLO bounding boxes in an OpenCV window."""
+        try:
+            import cv2
+            display = cv_img.copy()
+            for r in results:
+                for box in r.boxes:
+                    cls_id = int(box.cls[0])
+                    conf = float(box.conf[0])
+                    x1, y1, x2, y2 = box.xyxy[0].cpu().numpy().astype(int)
+                    if cls_id == 0:
+                        color = (0, 255, 0)
+                        label = f'PERSON {conf:.2f}'
+                    else:
+                        color = (128, 128, 128)
+                        label = f'cls{cls_id} {conf:.2f}'
+                    cv2.rectangle(display, (x1, y1), (x2, y2), color, 2)
+                    cv2.putText(display, label, (x1, y1 - 8),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+
+            # Status bar at top
+            status = f'streak: {self._consec_count}/{self._consec_required}'
+            if self._detection_published:
+                status += '  |  CONFIRMED'
+                bar_color = (0, 200, 0)
+            else:
+                bar_color = (40, 40, 40)
+            cv2.rectangle(display, (0, 0), (display.shape[1], 22), bar_color, -1)
+            cv2.putText(display, status, (6, 16),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+
+            cv2.imshow('BoilerHawk — Human Detector', display)
+            cv2.waitKey(1)
+        except Exception:
+            pass
+
     def reset_detection(self) -> None:
         """Allow detecting again (called after mission reacts)."""
         self._detection_published = False
@@ -327,6 +367,11 @@ def main(args=None):
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
+        pass
+    try:
+        import cv2
+        cv2.destroyAllWindows()
+    except Exception:
         pass
     node.destroy_node()
     rclpy.shutdown()

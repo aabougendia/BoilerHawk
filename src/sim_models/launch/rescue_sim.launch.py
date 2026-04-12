@@ -83,8 +83,6 @@ def generate_launch_description():
                     '-v', 'ArduCopter',
                     '-f', 'gazebo-iris',
                     '--model', 'JSON',
-                    '--map',
-                    '--console',
                     '--out', 'udp:127.0.0.1:14550',
                 ],
                 output='log',
@@ -220,7 +218,7 @@ def generate_launch_description():
             {'pose_topic': '/mavros/local_position/pose'},
             {'resolution': 0.25},
             {'max_range': 5.0},
-            {'inflate_radius': 0.4},
+            {'inflate_radius': 0.2},
             {'grid_frame': 'map'},
             {'grid_origin_x': -2.0},
             {'grid_origin_y': -2.0},
@@ -302,10 +300,10 @@ def generate_launch_description():
             mission_config,
             {'strategy_name': 'search_and_rescue'},
             {'strategy_params':
-                '{"center_x": 10.0, "center_y": 10.0, '
-                '"altitude": 3.0, "initial_leg": 3.0, '
-                '"leg_increment": 3.0, "num_legs": 12, '
-                '"hover_duration": 5.0, "max_detections": 3}'},
+                '{"center_x": 15.0, "center_y": 12.0, '
+                '"altitude": 3.0, "initial_leg": 2.0, '
+                '"leg_increment": 2.0, "num_legs": 12, '
+                '"hover_duration": 5.0, "max_detections": 1}'},
             {'takeoff_altitude': 3.0},
             {'waypoint_threshold': 2.0},
             {'auto_start': True},
